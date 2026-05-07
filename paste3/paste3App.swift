@@ -5,28 +5,26 @@
 //  Created by 余生辉 on 2026/4/29.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 @main
 struct paste3App: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            ClipboardItem.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+#if os(macOS)
+    @NSApplicationDelegateAdaptor(Paste3AppDelegate.self) private var appDelegate
+#endif
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Paste3WindowID.history) {
             ContentView()
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(Paste3ModelContainer.shared)
+
+#if os(macOS)
+        MenuBarExtra("paste3", systemImage: "doc.on.clipboard") {
+            MenuBarControls()
+        }
+        .menuBarExtraStyle(.menu)
+#endif
     }
 }

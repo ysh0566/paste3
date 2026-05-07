@@ -14,9 +14,6 @@ struct ContentView: View {
 
     @State private var searchText = ""
     @State private var copiedItemID: UUID?
-#if os(macOS)
-    @State private var monitor: ClipboardMonitor?
-#endif
 
     private var filteredItems: [ClipboardItem] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,7 +34,6 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 860, minHeight: 420)
-        .onAppear(perform: startClipboardMonitorIfNeeded)
     }
 
     private var header: some View {
@@ -96,18 +92,6 @@ struct ContentView: View {
             }
             .scrollIndicators(.visible)
         }
-    }
-
-    private func startClipboardMonitorIfNeeded() {
-#if os(macOS)
-        guard monitor == nil else {
-            return
-        }
-
-        let monitor = ClipboardMonitor(modelContext: modelContext)
-        monitor.start()
-        self.monitor = monitor
-#endif
     }
 
     private func delete(_ item: ClipboardItem) {
