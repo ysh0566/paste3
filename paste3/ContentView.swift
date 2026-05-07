@@ -8,6 +8,10 @@
 import SwiftData
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#endif
+
 enum HistoryDisplayMode {
     case window
     case floatingPanel
@@ -92,7 +96,7 @@ struct ContentView: View {
             cards: filteredItems.map { item in
                 ClipboardCardSnapshot(
                     item: item,
-                    byteSizeText: ClipboardCardFormatters.byteSize(item.byteSize),
+                    characterCountText: ClipboardCardFormatters.characterCount(item.text.count),
                     createdAtText: ClipboardCardFormatters.relativeTimestamp(for: item.createdAt, relativeTo: referenceDate)
                 )
             }
@@ -435,27 +439,20 @@ private struct ClipboardCardSnapshot: Identifiable {
     var id: UUID { item.id }
 
     let item: ClipboardItem
-    let byteSizeText: String
+    let characterCountText: String
     let createdAtText: String
 }
 
 @MainActor
 private enum ClipboardCardFormatters {
-    private static let byteFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useBytes, .useKB, .useMB]
-        formatter.countStyle = .file
-        return formatter
-    }()
-
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter
     }()
 
-    static func byteSize(_ bytes: Int) -> String {
-        byteFormatter.string(fromByteCount: Int64(bytes))
+    static func characterCount(_ count: Int) -> String {
+        "\(count) 个字符"
     }
 
     static func relativeTimestamp(for date: Date, relativeTo referenceDate: Date) -> String {
@@ -477,34 +474,23 @@ private struct ClipboardCard: View {
         Paste3Theme.palette(for: colorScheme)
     }
 
+    private let cardSide: CGFloat = 220
+    private let iconSize: CGFloat = 42
+
+    private var headerHeight: CGFloat {
+        cardSide / 5
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center) {
-                    kindPill
-                    Spacer()
-                    Image(systemName: isCopied ? "checkmark.circle.fill" : snapshot.item.kind.symbolName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(isCopied ? Paste3Theme.success : snapshot.item.kind.tint(for: colorScheme))
-                }
+        VStack(spacing: 0) {
+            cardHeader
 
-                contentPreview
-            }
+            contentPreview
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            Spacer(minLength: 8)
-
-            HStack(spacing: 8) {
-                sourceBadge
-
-                Spacer()
-
-                Text(snapshot.createdAtText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(palette.tertiaryText)
-            }
+            cardFooter
         }
-        .padding(14)
-        .frame(width: snapshot.item.kind == .text && snapshot.item.text.count > 300 ? 360 : 280, height: 210, alignment: .topLeading)
+        .frame(width: cardSide, height: cardSide, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous))
         .background {
             RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
@@ -529,105 +515,292 @@ private struct ClipboardCard: View {
         .help("Click to copy. Right-click to delete.")
     }
 
-    private var kindPill: some View {
-        Text(snapshot.item.kind.badgeTitle)
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(snapshot.item.kind.badgeText(for: colorScheme))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(snapshot.item.kind.badgeFill(for: colorScheme))
+    private var cardHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(snapshot.item.kind.cardTitle)
+                    .font(.system(size: 16, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                Text(snapshot.createdAtText)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: 8)
+
+            sourceIcon
+                .frame(width: iconSize, height: iconSize)
+                .padding(6)
+                .background {
+                    Circle()
+                        .fill(.white.opacity(0.18))
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isCopied {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
+                    }
+                }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: headerHeight)
+        .background {
+            RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
+                .fill(headerFill)
+                .overlay(alignment: .trailing) {
+                    Circle()
+                        .stroke(.white.opacity(0.24), lineWidth: 1)
+                        .frame(width: 72, height: 72)
+                        .offset(x: 20)
+                }
+        }
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: Paste3Theme.radius,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: Paste3Theme.radius,
+                style: .continuous
+            )
+        )
+    }
+
+    private var cardFooter: some View {
+        HStack {
+            Spacer()
+            Text(snapshot.characterCountText)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.tertiaryText)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+    }
+
+    private var headerFill: Color {
+#if os(macOS)
+        if let color = AppIconAppearanceCache.shared.headerColor(
+            for: snapshot.item.sourceBundleIdentifier,
+            colorScheme: colorScheme
+        ) {
+            return color
+        }
+#endif
+
+        return snapshot.item.kind.headerFill(for: colorScheme)
+    }
+
+    @ViewBuilder
+    private var sourceIcon: some View {
+#if os(macOS)
+        if let icon = AppIconAppearanceCache.shared.icon(for: snapshot.item.sourceBundleIdentifier) {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+        } else {
+            fallbackSourceIcon
+        }
+#else
+        fallbackSourceIcon
+#endif
+    }
+
+    private var fallbackSourceIcon: some View {
+        Image(systemName: snapshot.item.kind.sourceSymbolName)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(.white)
+            .padding(8)
+    }
+
+    private var contentText: some View {
+        Text(snapshot.item.text)
+            .font(snapshot.item.kind == .command ? .system(size: 12, weight: .semibold, design: .monospaced) : .system(size: 13, weight: .semibold))
+            .foregroundStyle(palette.text)
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var contentPreview: some View {
-        if snapshot.item.kind == .url {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(snapshot.item.text)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(palette.primary)
-                    .lineLimit(2)
-                    .underline()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background {
-                        RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                            .fill(palette.insetFill.opacity(colorScheme == .dark ? 0.42 : 1))
-                    }
-
-                Text(snapshot.item.searchText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(palette.secondaryText)
-                    .lineLimit(2)
-            }
-        } else {
+        if snapshot.item.text.count > 180 || snapshot.item.text.contains("\n") {
             ScrollView {
-                Text(snapshot.item.text)
-                    .font(snapshot.item.kind == .command ? .system(size: 13, design: .monospaced) : .system(size: 13))
-                    .foregroundStyle(palette.text)
-                    .lineSpacing(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                contentText
             }
-            .frame(height: 118)
-            .padding(10)
-            .background {
-                RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                    .fill(snapshot.item.kind == .command ? palette.insetFill.opacity(0.9) : Color.clear)
-            }
-            .overlay {
-                if snapshot.item.kind == .command {
-                    RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                        .stroke(palette.border, lineWidth: 0.5)
-                }
-            }
+            .scrollIndicators(.hidden)
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+        } else {
+            contentText
+                .lineLimit(5)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
         }
     }
 
-    private var sourceBadge: some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(snapshot.item.kind.tint(for: colorScheme).opacity(0.22))
-                .frame(width: 20, height: 20)
-                .overlay {
-                    Image(systemName: snapshot.item.kind.sourceSymbolName)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(snapshot.item.kind.tint(for: colorScheme))
-                }
+}
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(snapshot.item.sourceAppName?.isEmpty == false ? snapshot.item.sourceAppName! : "Unknown")
-                    .lineLimit(1)
-                Text(snapshot.byteSizeText)
-                    .foregroundStyle(palette.tertiaryText)
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(palette.secondaryText)
+#if os(macOS)
+@MainActor
+private final class AppIconAppearanceCache {
+    static let shared = AppIconAppearanceCache()
+
+    private struct Entry {
+        let icon: NSImage
+        let dominantColor: NSColor?
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    func icon(for bundleIdentifier: String?) -> NSImage? {
+        entry(for: bundleIdentifier)?.icon
+    }
+
+    func headerColor(for bundleIdentifier: String?, colorScheme: ColorScheme) -> Color? {
+        guard let dominantColor = entry(for: bundleIdentifier)?.dominantColor else {
+            return nil
         }
+
+        return dominantColor.headerColor(for: colorScheme)
+    }
+
+    private func entry(for bundleIdentifier: String?) -> Entry? {
+        guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return nil
+        }
+
+        if let entry = entries[bundleIdentifier] {
+            return entry
+        }
+
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return nil
+        }
+
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        let entry = Entry(icon: icon, dominantColor: icon.dominantColor())
+        entries[bundleIdentifier] = entry
+        return entry
     }
 }
 
-extension ClipboardKind {
-    var badgeTitle: String {
-        switch self {
-        case .text:
-            "TEXT SNIPPET"
-        case .url:
-            "LINK"
-        case .command:
-            "COMMAND"
+private extension NSImage {
+    func dominantColor(sampleSize: Int = 28) -> NSColor? {
+        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
         }
-    }
 
-    var symbolName: String {
+        let width = sampleSize
+        let height = sampleSize
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var buckets: [Int: (red: Double, green: Double, blue: Double, weight: Double)] = [:]
+
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let alpha = Double(pixels[offset + 3]) / 255
+            guard alpha > 0.35 else {
+                continue
+            }
+
+            let red = Double(pixels[offset]) / 255
+            let green = Double(pixels[offset + 1]) / 255
+            let blue = Double(pixels[offset + 2]) / 255
+            let color = NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)
+
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+
+            guard saturation > 0.12, brightness > 0.12, brightness < 0.96 else {
+                continue
+            }
+
+            let hueBucket = Int((hue * 24).rounded(.down))
+            let saturationBucket = Int((saturation * 4).rounded(.down))
+            let brightnessBucket = Int((brightness * 4).rounded(.down))
+            let key = hueBucket * 100 + saturationBucket * 10 + brightnessBucket
+            let weight = alpha * (0.65 + Double(saturation))
+            let previous = buckets[key] ?? (0, 0, 0, 0)
+            buckets[key] = (
+                previous.red + red * weight,
+                previous.green + green * weight,
+                previous.blue + blue * weight,
+                previous.weight + weight
+            )
+        }
+
+        guard let dominant = buckets.values.max(by: { $0.weight < $1.weight }), dominant.weight > 0 else {
+            return nil
+        }
+
+        return NSColor(
+            calibratedRed: dominant.red / dominant.weight,
+            green: dominant.green / dominant.weight,
+            blue: dominant.blue / dominant.weight,
+            alpha: 1
+        )
+    }
+}
+
+private extension NSColor {
+    func headerColor(for colorScheme: ColorScheme) -> Color {
+        guard let rgbColor = usingColorSpace(.deviceRGB) else {
+            return Color(self)
+        }
+
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        rgbColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+
+        let adjustedSaturation = min(max(saturation * 1.18, 0.42), 0.88)
+        let adjustedBrightness: CGFloat
+        if colorScheme == .dark {
+            adjustedBrightness = min(max(brightness * 0.72, 0.32), 0.58)
+        } else {
+            adjustedBrightness = min(max(brightness, 0.54), 0.86)
+        }
+
+        return Color(hue: hue, saturation: adjustedSaturation, brightness: adjustedBrightness)
+    }
+}
+#endif
+
+extension ClipboardKind {
+    var cardTitle: String {
         switch self {
         case .text:
-            "text.quote"
+            "文本"
         case .url:
-            "link"
+            "链接"
         case .command:
-            "terminal"
+            "命令"
         }
     }
 
@@ -642,23 +815,15 @@ extension ClipboardKind {
         }
     }
 
-    func tint(for colorScheme: ColorScheme) -> Color {
+    func headerFill(for colorScheme: ColorScheme) -> Color {
         switch self {
         case .text:
-            Paste3Theme.palette(for: colorScheme).primary
+            colorScheme == .dark ? Color(red: 0.03, green: 0.55, blue: 0.31) : Color(red: 0.0, green: 0.80, blue: 0.42)
         case .url:
-            colorScheme == .dark ? Color(red: 1.0, green: 0.71, blue: 0.58) : Color(red: 0.0, green: 0.42, blue: 0.15)
+            colorScheme == .dark ? Color(red: 0.07, green: 0.34, blue: 0.82) : Color(red: 0.12, green: 0.43, blue: 0.95)
         case .command:
-            Paste3Theme.success
+            colorScheme == .dark ? Color(red: 0.40, green: 0.32, blue: 0.72) : Color(red: 0.48, green: 0.38, blue: 0.82)
         }
-    }
-
-    func badgeFill(for colorScheme: ColorScheme) -> Color {
-        tint(for: colorScheme).opacity(colorScheme == .dark ? 0.20 : 0.18)
-    }
-
-    func badgeText(for colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? tint(for: colorScheme) : Paste3Theme.palette(for: colorScheme).secondaryText
     }
 }
 
