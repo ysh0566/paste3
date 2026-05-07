@@ -43,6 +43,27 @@ struct ContentView: View {
         Paste3Theme.palette(for: colorScheme)
     }
 
+    private var shellPadding: EdgeInsets {
+        switch displayMode {
+        case .window:
+            EdgeInsets(
+                top: Paste3Theme.margin,
+                leading: Paste3Theme.margin,
+                bottom: Paste3Theme.margin,
+                trailing: Paste3Theme.margin
+            )
+        case .floatingPanel:
+            // The floating history surface must visually sit on the display bottom;
+            // keeping the bottom inset here makes it look like the panel is still above the Dock.
+            EdgeInsets(
+                top: Paste3Theme.margin,
+                leading: Paste3Theme.margin,
+                bottom: 0,
+                trailing: Paste3Theme.margin
+            )
+        }
+    }
+
     private var historySnapshot: HistorySnapshot {
         let recentItems = Array(items.prefix(ClipboardStore.defaultMaxItems))
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,7 +102,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .paste3GlassShell()
-            .padding(Paste3Theme.margin)
+            .padding(shellPadding)
         }
         .frame(minWidth: displayMode.minimumSize.width, minHeight: displayMode.minimumSize.height)
         .onExitCommand {

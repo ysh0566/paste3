@@ -63,7 +63,7 @@ final class QuickPanelController {
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.level = .floating
+        panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -88,6 +88,7 @@ final class QuickPanelController {
         }
 
         let visibleFrame = screen.visibleFrame
+        let screenFrame = screen.frame
         let availableWidth = visibleFrame.width - Self.horizontalScreenInset * 2
         let width = min(visibleFrame.width, max(Self.minimumPanelSize.width, availableWidth))
         let height = min(
@@ -95,10 +96,10 @@ final class QuickPanelController {
             max(Self.minimumPanelSize.height, visibleFrame.height * Self.screenHeightRatio)
         )
         let x = visibleFrame.midX - width / 2
-        let y = visibleFrame.minY
+        let y = screenFrame.minY
 
-        // Recompute from the visible frame each time so the panel stays at the bottom edge
-        // when the active display, menu bar, or Dock position changes.
+        // Size from the visible frame, but anchor to the full screen bottom so the
+        // panel touches the display edge instead of floating above the Dock.
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
@@ -164,5 +165,9 @@ final class QuickPanelController {
 private final class QuickPanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 }
 #endif
