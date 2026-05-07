@@ -13,10 +13,14 @@ struct MenuBarControls: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Quick Panel") {
+            QuickPanelController.shared.toggle()
+        }
+        .keyboardShortcut("v", modifiers: [.command, .shift])
+
         Button("Open History") {
             showHistoryWindow()
         }
-        .keyboardShortcut("v", modifiers: [.command, .shift])
 
         Divider()
 
