@@ -14,6 +14,8 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
     private var monitor: ClipboardMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Keep paste3 as a menu bar utility even when launched from Xcode or a stale bundle.
+        NSApp.setActivationPolicy(.accessory)
         startClipboardMonitorIfNeeded()
     }
 

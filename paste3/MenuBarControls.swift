@@ -10,17 +10,11 @@ import AppKit
 import SwiftUI
 
 struct MenuBarControls: View {
-    @Environment(\.openWindow) private var openWindow
-
     var body: some View {
-        Button("Quick Panel") {
+        Button("Open History") {
             QuickPanelController.shared.toggle()
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
-
-        Button("Open History") {
-            showHistoryWindow()
-        }
 
         Divider()
 
@@ -28,11 +22,6 @@ struct MenuBarControls: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
-    }
-
-    private func showHistoryWindow() {
-        openWindow(id: Paste3WindowID.history)
-        NSApp.activate(ignoringOtherApps: true)
     }
 }
 #endif

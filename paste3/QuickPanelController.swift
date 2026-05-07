@@ -14,7 +14,15 @@ import SwiftUI
 final class QuickPanelController {
     static let shared = QuickPanelController()
 
+    private static let screenHeightRatio: CGFloat = 0.36
+    private static let horizontalScreenInset: CGFloat = 16
+    private static let minimumPanelSize = CGSize(width: 760, height: 430)
+    private static let maximumPanelHeight: CGFloat = 560
+
     private var panel: NSPanel?
+    private var localOutsideClickMonitor: Any?
+    private var globalOutsideClickMonitor: Any?
+    private var outsideClickMonitoringTask: Task<Void, Never>?
 
     private init() {}
 
@@ -32,15 +40,19 @@ final class QuickPanelController {
         position(panel)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        scheduleOutsideClickMonitoring()
     }
 
     func hide() {
+        outsideClickMonitoringTask?.cancel()
+        outsideClickMonitoringTask = nil
         panel?.orderOut(nil)
+        stopOutsideClickMonitoring()
     }
 
     private func makePanel() -> NSPanel {
         let panel = QuickPanelWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 340),
             styleMask: [.titled, .fullSizeContentView, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -49,17 +61,18 @@ final class QuickPanelController {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = true
+        panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.isOpaque = false
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
 
-        let rootView = QuickPanelView(onDismiss: { [weak self] in
+        let rootView = ContentView(displayMode: .floatingPanel, onDismiss: { [weak self] in
             self?.hide()
         })
         .modelContainer(Paste3ModelContainer.shared)
@@ -75,13 +88,76 @@ final class QuickPanelController {
         }
 
         let visibleFrame = screen.visibleFrame
-        let width = min(920, max(420, visibleFrame.width - 80))
-        let height: CGFloat = 320
+        let availableWidth = visibleFrame.width - Self.horizontalScreenInset * 2
+        let width = min(visibleFrame.width, max(Self.minimumPanelSize.width, availableWidth))
+        let height = min(
+            Self.maximumPanelHeight,
+            max(Self.minimumPanelSize.height, visibleFrame.height * Self.screenHeightRatio)
+        )
         let x = visibleFrame.midX - width / 2
-        let y = visibleFrame.minY + 28
+        let y = visibleFrame.minY
 
-        // Recompute the frame each time because the active display or Dock position can change.
+        // Recompute from the visible frame each time so the panel stays at the bottom edge
+        // when the active display, menu bar, or Dock position changes.
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+    }
+
+    private func scheduleOutsideClickMonitoring() {
+        outsideClickMonitoringTask?.cancel()
+
+        // Installing the event monitors on the next run loop avoids treating the
+        // menu item click that opened the panel as an immediate outside click.
+        outsideClickMonitoringTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled, panel?.isVisible == true else {
+                return
+            }
+            startOutsideClickMonitoring()
+        }
+    }
+
+    private func startOutsideClickMonitoring() {
+        guard localOutsideClickMonitor == nil, globalOutsideClickMonitor == nil else {
+            return
+        }
+
+        localOutsideClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.hideIfClickIsOutsidePanel(event)
+            return event
+        }
+
+        globalOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            Task { @MainActor in
+                self?.hideIfClickIsOutsidePanel(event)
+            }
+        }
+    }
+
+    private func stopOutsideClickMonitoring() {
+        if let localOutsideClickMonitor {
+            NSEvent.removeMonitor(localOutsideClickMonitor)
+            self.localOutsideClickMonitor = nil
+        }
+
+        if let globalOutsideClickMonitor {
+            NSEvent.removeMonitor(globalOutsideClickMonitor)
+            self.globalOutsideClickMonitor = nil
+        }
+    }
+
+    private func hideIfClickIsOutsidePanel(_ event: NSEvent) {
+        guard let panel, panel.isVisible else {
+            stopOutsideClickMonitoring()
+            return
+        }
+
+        if event.window === panel {
+            return
+        }
+
+        if !panel.frame.contains(NSEvent.mouseLocation) {
+            hide()
+        }
     }
 }
 

@@ -15,16 +15,16 @@ struct paste3App: App {
 #endif
 
     var body: some Scene {
-        WindowGroup(id: Paste3WindowID.history) {
-            ContentView()
-        }
-        .modelContainer(Paste3ModelContainer.shared)
-
 #if os(macOS)
         MenuBarExtra("paste3", systemImage: "doc.on.clipboard") {
             MenuBarControls()
         }
         .menuBarExtraStyle(.menu)
+#else
+        WindowGroup(id: Paste3WindowID.history) {
+            ContentView()
+        }
+        .modelContainer(Paste3ModelContainer.shared)
 #endif
     }
 }
