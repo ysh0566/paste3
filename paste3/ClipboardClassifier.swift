@@ -33,12 +33,12 @@ enum ClipboardClassifier {
         }
 
         let storedText = String(rawText.prefix(maxStoredTextLength))
-        let normalized = normalizeForHash(storedText)
-        guard !normalized.isEmpty else {
+        let normalizedForClassification = normalizeForClassification(storedText)
+        guard !normalizedForClassification.isEmpty else {
             return nil
         }
 
-        let kind = classify(normalizedText: normalized, originalText: storedText)
+        let kind = classify(normalizedText: normalizedForClassification, originalText: storedText)
         let searchText = buildSearchText(text: storedText, kind: kind, source: source)
 
         return ClipboardItemCandidate(
@@ -46,12 +46,12 @@ enum ClipboardClassifier {
             text: storedText,
             searchText: searchText,
             source: source,
-            contentHash: hash(normalized),
+            contentHash: hash(text: storedText, source: source),
             byteSize: storedText.utf8.count
         )
     }
 
-    static func normalizeForHash(_ text: String) -> String {
+    static func normalizeForClassification(_ text: String) -> String {
         text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -124,8 +124,27 @@ enum ClipboardClassifier {
         return text.contains("\n") && codeSignals.contains(where: { text.contains($0) })
     }
 
-    private static func hash(_ text: String) -> String {
-        let digest = SHA256.hash(data: Data(text.utf8))
+    private static func hash(text: String, source: ClipboardSource) -> String {
+        let appName = normalizeSourceComponent(source.appName)
+        let bundleIdentifier = normalizeSourceComponent(source.bundleIdentifier)
+        // Source is part of identity: identical text copied from different apps should stay separate.
+        let input = [
+            hashField("text", text),
+            hashField("sourceAppName", appName),
+            hashField("sourceBundleIdentifier", bundleIdentifier),
+        ].joined()
+
+        let digest = SHA256.hash(data: Data(input.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func normalizeSourceComponent(_ value: String?) -> String {
+        value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+    }
+
+    private static func hashField(_ name: String, _ value: String) -> String {
+        "\(name):\(value.utf8.count):\(value)\n"
     }
 }

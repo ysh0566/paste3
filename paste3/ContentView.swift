@@ -43,6 +43,17 @@ struct ContentView: View {
         Paste3Theme.palette(for: colorScheme)
     }
 
+    @ViewBuilder
+    private var outerBackground: some View {
+        switch displayMode {
+        case .window:
+            palette.background
+                .ignoresSafeArea()
+        case .floatingPanel:
+            Color.clear
+        }
+    }
+
     private var shellPadding: EdgeInsets {
         switch displayMode {
         case .window:
@@ -53,13 +64,13 @@ struct ContentView: View {
                 trailing: Paste3Theme.margin
             )
         case .floatingPanel:
-            // The floating history surface must visually sit on the display bottom;
-            // keeping the bottom inset here makes it look like the panel is still above the Dock.
+            // Floating mode already has its screen inset from QuickPanelController.
+            // Extra horizontal/bottom padding becomes visible empty space around the panel.
             EdgeInsets(
                 top: Paste3Theme.margin,
-                leading: Paste3Theme.margin,
+                leading: 0,
                 bottom: 0,
-                trailing: Paste3Theme.margin
+                trailing: 0
             )
         }
     }
@@ -92,11 +103,10 @@ struct ContentView: View {
         let snapshot = historySnapshot
 
         ZStack(alignment: .bottom) {
-            palette.background
-                .ignoresSafeArea()
+            outerBackground
 
             VStack(spacing: 0) {
-                header(isHistoryEmpty: snapshot.recentCount == 0)
+                header
                 historyContent(cards: snapshot.cards, recentCount: snapshot.recentCount)
                 footer(recentCount: snapshot.recentCount)
             }
@@ -110,7 +120,7 @@ struct ContentView: View {
         }
     }
 
-    private func header(isHistoryEmpty: Bool) -> some View {
+    private var header: some View {
         HStack(spacing: 16) {
             HStack(spacing: 16) {
                 Text("ClipFlow")
@@ -124,15 +134,8 @@ struct ContentView: View {
 
             searchField
 
-            HStack(spacing: 8) {
-                utilityButton(systemImage: "bolt.horizontal.circle", help: "Clipboard monitor is running") {}
-                    .disabled(true)
-
-                utilityButton(systemImage: "trash", help: "Clear history") {
-                    deleteAllItems()
-                }
-                .disabled(isHistoryEmpty)
-            }
+            utilityButton(systemImage: "bolt.horizontal.circle", help: "Clipboard monitor is running") {}
+                .disabled(true)
         }
         .padding(.horizontal, 24)
         .frame(height: 56)
@@ -202,7 +205,7 @@ struct ContentView: View {
         if cards.isEmpty {
             emptyState(recentCount: recentCount)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .frame(minHeight: 260)
+                .frame(minHeight: 226)
         } else {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: Paste3Theme.gutter) {
@@ -213,6 +216,8 @@ struct ContentView: View {
                             copyAction: {
                                 ClipboardWriter.copyBack(card.item.text)
                                 copiedItemID = card.id
+                                touch(card.item)
+                                onDismiss?()
                             },
                             deleteAction: {
                                 delete(card.item)
@@ -221,11 +226,11 @@ struct ContentView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.vertical, 24)
+                .padding(.vertical, 8)
             }
             .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .frame(minHeight: 260)
+            .frame(minHeight: 226)
         }
     }
 
@@ -301,15 +306,9 @@ struct ContentView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(palette.tertiaryText)
 
-            Button(role: .destructive) {
-                deleteAllItems()
-            } label: {
-                Label("Clear History", systemImage: "delete.left")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(palette.error)
-            }
-            .buttonStyle(.plain)
-            .disabled(recentCount == 0)
+            Text(recentCount == 0 ? "Right-click the status item for settings" : "Right-click the status item to manage history")
+                .font(.system(size: 12))
+                .foregroundStyle(palette.tertiaryText)
         }
         .padding(.horizontal, 24)
         .frame(height: 42)
@@ -344,11 +343,11 @@ struct ContentView: View {
         }
     }
 
-    private func deleteAllItems() {
+    private func touch(_ item: ClipboardItem) {
         do {
-            try ClipboardStore(modelContext: modelContext).deleteAll()
+            try ClipboardStore(modelContext: modelContext).touch(item)
         } catch {
-            assertionFailure("Failed to clear clipboard history: \(error)")
+            assertionFailure("Failed to update clipboard item recency: \(error)")
         }
     }
 }
@@ -484,9 +483,9 @@ private struct ClipboardCard: View {
                 HStack(alignment: .center) {
                     kindPill
                     Spacer()
-                    Image(systemName: snapshot.item.kind.symbolName)
+                    Image(systemName: isCopied ? "checkmark.circle.fill" : snapshot.item.kind.symbolName)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(snapshot.item.kind.tint(for: colorScheme))
+                        .foregroundStyle(isCopied ? Paste3Theme.success : snapshot.item.kind.tint(for: colorScheme))
                 }
 
                 contentPreview
@@ -503,30 +502,17 @@ private struct ClipboardCard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(palette.tertiaryText)
             }
-
-            HStack(spacing: 8) {
-                Button(action: copyAction) {
-                    Label(isCopied ? "Copied" : "Copy", systemImage: isCopied ? "checkmark" : "doc.on.doc")
-                }
-                .buttonStyle(GlassActionButtonStyle(isPrimary: true))
-
-                Button(role: .destructive, action: deleteAction) {
-                    Label("Delete", systemImage: "trash")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(GlassActionButtonStyle(isPrimary: false))
-                .help("Delete")
-            }
         }
         .padding(14)
-        .frame(width: snapshot.item.kind == .text && snapshot.item.text.count > 300 ? 360 : 280, height: 232, alignment: .topLeading)
+        .frame(width: snapshot.item.kind == .text && snapshot.item.text.count > 300 ? 360 : 280, height: 210, alignment: .topLeading)
+        .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous))
         .background {
             RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .fill(isHovering ? palette.primary.opacity(0.10) : palette.cardFill)
+                .fill(isCopied ? Paste3Theme.success.opacity(0.12) : isHovering ? palette.primary.opacity(0.10) : palette.cardFill)
         }
         .overlay {
             RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .stroke(isHovering ? palette.primary.opacity(0.58) : palette.border, lineWidth: 0.7)
+                .stroke(isCopied ? Paste3Theme.success.opacity(0.72) : isHovering ? palette.primary.opacity(0.58) : palette.border, lineWidth: 0.7)
         }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.05), radius: 12, x: 0, y: 6)
         .scaleEffect(isHovering ? 1.01 : 1)
@@ -534,6 +520,13 @@ private struct ClipboardCard: View {
         .onHover { hovering in
             isHovering = hovering
         }
+        .onTapGesture(perform: copyAction)
+        .contextMenu {
+            Button(role: .destructive, action: deleteAction) {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .help("Click to copy. Right-click to delete.")
     }
 
     private var kindPill: some View {
@@ -557,7 +550,6 @@ private struct ClipboardCard: View {
                     .foregroundStyle(palette.primary)
                     .lineLimit(2)
                     .underline()
-                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background {
@@ -576,7 +568,6 @@ private struct ClipboardCard: View {
                     .font(snapshot.item.kind == .command ? .system(size: 13, design: .monospaced) : .system(size: 13))
                     .foregroundStyle(palette.text)
                     .lineSpacing(2)
-                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 118)
@@ -614,31 +605,6 @@ private struct ClipboardCard: View {
             .font(.system(size: 11))
             .foregroundStyle(palette.secondaryText)
         }
-    }
-}
-
-private struct GlassActionButtonStyle: ButtonStyle {
-    @Environment(\.colorScheme) private var colorScheme
-    let isPrimary: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        let palette = Paste3Theme.palette(for: colorScheme)
-
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(isPrimary ? palette.primaryText : palette.secondaryText)
-            .padding(.horizontal, isPrimary ? 10 : 8)
-            .frame(height: 28)
-            .background {
-                RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                    .fill(isPrimary ? palette.primary : palette.insetFill.opacity(colorScheme == .dark ? 0.5 : 1))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                    .stroke(isPrimary ? Color.clear : palette.border, lineWidth: 0.5)
-            }
-            .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
 

@@ -14,10 +14,10 @@ import SwiftUI
 final class QuickPanelController {
     static let shared = QuickPanelController()
 
-    private static let screenHeightRatio: CGFloat = 0.36
+    private static let screenHeightRatio: CGFloat = 0.28
     private static let horizontalScreenInset: CGFloat = 16
-    private static let minimumPanelSize = CGSize(width: 760, height: 430)
-    private static let maximumPanelHeight: CGFloat = 560
+    private static let minimumPanelSize = CGSize(width: 760, height: 340)
+    private static let maximumPanelHeight: CGFloat = 380
 
     private var panel: NSPanel?
     private var localOutsideClickMonitor: Any?

@@ -16,10 +16,9 @@ struct paste3App: App {
 
     var body: some Scene {
 #if os(macOS)
-        MenuBarExtra("paste3", systemImage: "doc.on.clipboard") {
-            MenuBarControls()
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.menu)
 #else
         WindowGroup(id: Paste3WindowID.history) {
             ContentView()

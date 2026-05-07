@@ -22,7 +22,8 @@ final class ClipboardStore {
 
     @discardableResult
     func insert(_ candidate: ClipboardItemCandidate) throws -> ClipboardItem? {
-        if try contains(hash: candidate.contentHash) {
+        if let existingItem = try item(matchingHash: candidate.contentHash) {
+            try touch(existingItem)
             return nil
         }
 
@@ -61,19 +62,24 @@ final class ClipboardStore {
         try modelContext.save()
     }
 
+    func touch(_ item: ClipboardItem) throws {
+        item.createdAt = Date()
+        try modelContext.save()
+    }
+
     func deleteAll() throws {
         try modelContext.delete(model: ClipboardItem.self)
         try modelContext.save()
     }
 
-    private func contains(hash: String) throws -> Bool {
+    private func item(matchingHash hash: String) throws -> ClipboardItem? {
         var descriptor = FetchDescriptor<ClipboardItem>(
             predicate: #Predicate { item in
                 item.contentHash == hash
             }
         )
         descriptor.fetchLimit = 1
-        return try !modelContext.fetch(descriptor).isEmpty
+        return try modelContext.fetch(descriptor).first
     }
 
     private func pruneIfNeeded() throws {
