@@ -93,7 +93,7 @@ struct ContentView: View {
     }
 
     private var historySnapshot: HistorySnapshot {
-        let recentItems = Array(items.prefix(ClipboardStore.defaultMaxItems))
+        let recentItems = items
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let referenceDate = Date()
 
@@ -137,6 +137,7 @@ struct ContentView: View {
         .focused($historyHasKeyboardFocus)
         .focusEffectDisabled()
         .onAppear {
+            pruneExpiredHistory()
             resetSelection(to: cardIDs)
             focusHistory()
         }
@@ -247,6 +248,7 @@ struct ContentView: View {
                                 }
                         }
                     }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -380,16 +382,15 @@ struct ContentView: View {
     private func footer(recentCount: Int) -> some View {
         HStack(spacing: 24) {
             HStack(spacing: 8) {
-                Text("STORAGE:")
+                Text("RETENTION:")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(palette.tertiaryText)
 
-                ProgressView(value: min(Double(recentCount), Double(ClipboardStore.defaultMaxItems)), total: Double(ClipboardStore.defaultMaxItems))
-                    .progressViewStyle(.linear)
-                    .tint(palette.primary)
-                    .frame(width: 96)
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(palette.primary)
 
-                Text("\(recentCount)/\(ClipboardStore.defaultMaxItems) items")
+                Text("\(ClipboardRetentionPreference.shared.period.title) · \(recentCount) items")
                     .font(.system(size: 12))
                     .foregroundStyle(palette.secondaryText)
             }
@@ -437,6 +438,7 @@ struct ContentView: View {
                     cornerRadius: Paste3Theme.controlRadius,
                     fill: palette.insetFill.opacity(0.30)
                 )
+                .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(help)
@@ -455,6 +457,14 @@ struct ContentView: View {
             try ClipboardStore(modelContext: modelContext).touch(item)
         } catch {
             assertionFailure("Failed to update clipboard item recency: \(error)")
+        }
+    }
+
+    private func pruneExpiredHistory() {
+        do {
+            try ClipboardStore(modelContext: modelContext).pruneExpiredItemsIfNeeded()
+        } catch {
+            assertionFailure("Failed to prune expired clipboard history: \(error)")
         }
     }
 

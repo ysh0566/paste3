@@ -120,7 +120,10 @@ struct paste3Tests {
 
     @Test func storeTouchMovesItemToFront() throws {
         let context = try makeContext()
-        let store = ClipboardStore(modelContext: context)
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "forever")
+        )
         let source = ClipboardSource(appName: "Terminal", bundleIdentifier: "com.apple.Terminal")
         let firstCandidate = try #require(ClipboardClassifier.candidate(from: "git status", source: source))
         let secondCandidate = try #require(ClipboardClassifier.candidate(from: "git diff", source: source))
@@ -246,20 +249,71 @@ struct paste3Tests {
     }
 #endif
 
-    @Test func storePrunesAboveLimit() throws {
-        let context = try makeContext()
-        let store = ClipboardStore(modelContext: context, maxItems: 2)
-
-        for index in 0..<3 {
-            let candidate = try #require(ClipboardClassifier.candidate(
-                from: "clip \(index)",
-                source: ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
-            ))
-            try store.insert(candidate)
+    @Test func clipboardRetentionPreferencePersistsSelection() throws {
+        let suiteName = "paste3Tests.retention.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
         }
 
+        let preference = ClipboardRetentionPreference(defaults: defaults)
+        #expect(preference.period == .defaultPeriod)
+
+        let threeMonths = ClipboardRetentionPeriod.find(id: "month-3")
+        preference.setPeriod(threeMonths)
+
+        let reloadedPreference = ClipboardRetentionPreference(defaults: defaults)
+        #expect(reloadedPreference.period == threeMonths)
+    }
+
+    @Test func storePrunesItemsOlderThanRetentionPeriod() throws {
+        let now = Date()
+        let context = try makeContext()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "day-1"),
+            referenceDateProvider: { now }
+        )
+
+        let oldCandidate = try #require(ClipboardClassifier.candidate(
+            from: "old clip",
+            source: ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+        ))
+        let oldItem = try #require(try store.insert(oldCandidate))
+        oldItem.createdAt = now.addingTimeInterval(-2 * 24 * 60 * 60)
+        try context.save()
+
+        let freshCandidate = try #require(ClipboardClassifier.candidate(
+            from: "fresh clip",
+            source: ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+        ))
+        try store.insert(freshCandidate)
+
         let allItems = try store.items()
-        #expect(allItems.count == 2)
+        #expect(allItems.map(\.text) == ["fresh clip"])
+    }
+
+    @Test func storeKeepsOldItemsForever() throws {
+        let now = Date()
+        let context = try makeContext()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "forever"),
+            referenceDateProvider: { now }
+        )
+
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: "old but kept",
+            source: ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+        ))
+        let item = try #require(try store.insert(candidate))
+        item.createdAt = now.addingTimeInterval(-400 * 24 * 60 * 60)
+        try context.save()
+
+        try store.pruneExpiredItemsIfNeeded()
+
+        let allItems = try store.items()
+        #expect(allItems.map(\.text) == ["old but kept"])
     }
 
     private func makeContext() throws -> ModelContext {

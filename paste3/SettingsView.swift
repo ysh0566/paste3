@@ -16,6 +16,7 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .general
     @State private var selectedShortcutID = QuickPanelShortcutPreference.shared.shortcut.id
+    @State private var selectedRetentionPeriodID = ClipboardRetentionPreference.shared.period.id
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @State private var isConfirmingHistoryClear = false
 
@@ -41,6 +42,9 @@ struct SettingsView: View {
         .onAppear(perform: refreshState)
         .onChange(of: selectedShortcutID) { _, shortcutID in
             QuickPanelShortcutPreference.shared.setShortcut(QuickPanelShortcut.find(id: shortcutID))
+        }
+        .onChange(of: selectedRetentionPeriodID) { _, periodID in
+            updateRetentionPeriod(ClipboardRetentionPeriod.find(id: periodID))
         }
         .confirmationDialog(
             "清空剪贴板历史？",
@@ -217,8 +221,8 @@ struct SettingsView: View {
 
                 SettingsInfoRow(
                     title: "本机存储",
-                    detail: "剪贴板历史只保存在这台 Mac 上。",
-                    trailing: Text("\(items.count)/\(ClipboardStore.defaultMaxItems)")
+                    detail: "\(ClipboardRetentionPreference.shared.period.detail)，并且只保存在这台 Mac 上。",
+                    trailing: Text("\(items.count) 项")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(colors.secondaryText),
                     colors: colors
@@ -311,26 +315,40 @@ struct SettingsView: View {
             SettingsCard(colors: colors) {
                 VStack(alignment: .leading, spacing: 14) {
                     Slider(
-                        value: .constant(Double(items.count)),
-                        in: 0...Double(ClipboardStore.defaultMaxItems)
+                        value: retentionPeriodIndexBinding,
+                        in: 0...Double(ClipboardRetentionPeriod.all.count - 1),
+                        step: 1
                     )
-                    .disabled(true)
                     .tint(colors.accent)
 
-                    HStack {
-                        Text("0")
-                        Spacer()
-                        Text("\(ClipboardStore.defaultMaxItems)")
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(colors.primaryText)
+                    RetentionScaleLabels(colors: colors)
+
+                    Text(selectedRetentionPeriod.detail)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(colors.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentTransition(.numericText())
+                }
+
+                SettingsDivider(colors: colors)
+
+                HStack {
+                    Text("当前档位")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(colors.secondaryText)
+
+                    Spacer()
+
+                    Text(selectedRetentionPeriod.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(colors.primaryText)
                 }
 
                 SettingsDivider(colors: colors)
 
                 HStack {
                     Text("\(items.count) 个项目保存在本机")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(colors.primaryText)
 
                     Spacer()
@@ -369,7 +387,9 @@ struct SettingsView: View {
 
     private func refreshState() {
         selectedShortcutID = QuickPanelShortcutPreference.shared.shortcut.id
+        selectedRetentionPeriodID = ClipboardRetentionPreference.shared.period.id
         accessibilityTrusted = AccessibilityPermission.isTrusted
+        pruneHistory(using: ClipboardRetentionPreference.shared.period)
     }
 
     private func requestAccessibilityPermission() {
@@ -386,6 +406,35 @@ struct SettingsView: View {
             try ClipboardStore(modelContext: modelContext).deleteAll()
         } catch {
             assertionFailure("Failed to clear clipboard history: \(error)")
+        }
+    }
+
+    private var selectedRetentionPeriod: ClipboardRetentionPeriod {
+        ClipboardRetentionPeriod.find(id: selectedRetentionPeriodID)
+    }
+
+    private var retentionPeriodIndexBinding: Binding<Double> {
+        Binding {
+            Double(ClipboardRetentionPeriod.index(forID: selectedRetentionPeriodID))
+        } set: { value in
+            let index = min(
+                max(Int(value.rounded()), 0),
+                ClipboardRetentionPeriod.all.count - 1
+            )
+            selectedRetentionPeriodID = ClipboardRetentionPeriod.all[index].id
+        }
+    }
+
+    private func updateRetentionPeriod(_ period: ClipboardRetentionPeriod) {
+        ClipboardRetentionPreference.shared.setPeriod(period)
+        pruneHistory(using: period)
+    }
+
+    private func pruneHistory(using period: ClipboardRetentionPeriod) {
+        do {
+            try ClipboardStore(modelContext: modelContext, retentionPeriod: period).pruneExpiredItemsIfNeeded()
+        } catch {
+            assertionFailure("Failed to prune expired clipboard history: \(error)")
         }
     }
 }
@@ -454,7 +503,7 @@ private struct SettingsSidebarButton: View {
             }
             .foregroundStyle(isSelected ? colors.selectedText : colors.primaryText)
             .padding(.horizontal, 14)
-            .frame(height: 42)
+            .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(
@@ -477,6 +526,7 @@ private struct SettingsSidebarButton: View {
                         }
                     }
             }
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -587,6 +637,45 @@ private struct SettingsDivider: View {
     }
 }
 
+private struct RetentionScaleLabels: View {
+    let colors: SettingsColors
+
+    private let markers: [(title: String, index: Int)] = [
+        ("天", 0),
+        ("周", 6),
+        ("个月", 9),
+        ("年", 20),
+        ("永久", ClipboardRetentionPeriod.all.count - 1)
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                ForEach(markers, id: \.title) { marker in
+                    Text(marker.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(colors.primaryText)
+                        .position(
+                            x: markerX(marker.index, width: geometry.size.width),
+                            y: 12
+                        )
+                }
+            }
+        }
+        .frame(height: 24)
+    }
+
+    private func markerX(_ index: Int, width: CGFloat) -> CGFloat {
+        guard ClipboardRetentionPeriod.all.count > 1 else {
+            return 0
+        }
+
+        let edgeInset: CGFloat = 20
+        let availableWidth = max(width - edgeInset * 2, 0)
+        return edgeInset + availableWidth * CGFloat(index) / CGFloat(ClipboardRetentionPeriod.all.count - 1)
+    }
+}
+
 private struct SettingsGlassButtonStyle: ButtonStyle {
     let colors: SettingsColors
     var isDestructive = false
@@ -601,6 +690,7 @@ private struct SettingsGlassButtonStyle: ButtonStyle {
                 fill: buttonFill(isPressed: configuration.isPressed),
                 isProminent: configuration.isPressed
             )
+            .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
