@@ -45,6 +45,10 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var selectedItemID: UUID?
     @State private var copiedItemID: UUID?
+    @State private var isCommandKeyPressed = false
+#if os(macOS)
+    @State private var commandShortcutMonitor: Any?
+#endif
     @FocusState private var historyHasKeyboardFocus: Bool
 
     init(
@@ -140,9 +144,14 @@ struct ContentView: View {
             pruneExpiredHistory()
             resetSelection(to: cardIDs)
             focusHistory()
+            installCommandShortcutMonitor(cards: snapshot.cards)
+        }
+        .onDisappear {
+            uninstallCommandShortcutMonitor()
         }
         .onChange(of: cardIDs) { _, newIDs in
             normalizeSelection(in: newIDs)
+            installCommandShortcutMonitor(cards: snapshot.cards)
         }
         .onKeyPress(.leftArrow) {
             moveSelection(.previous, in: cardIDs)
@@ -289,11 +298,12 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: Paste3Theme.gutter) {
-                        ForEach(cards) { card in
+                        ForEach(Array(cards.enumerated()), id: \.element.id) { index, card in
                             ClipboardCard(
                                 snapshot: card,
                                 isSelected: selectedItemID == card.id,
                                 isCopied: copiedItemID == card.id,
+                                shortcutNumber: shortcutNumber(forCardAt: index),
                                 selectAction: {
                                     selectedItemID = card.id
                                     focusHistory()
@@ -520,6 +530,88 @@ struct ContentView: View {
         copy(selectedCard, shouldPaste: true)
     }
 
+    private func shortcutNumber(forCardAt index: Int) -> Int? {
+        guard displayMode == .floatingPanel, isCommandKeyPressed, index < 9 else {
+            return nil
+        }
+
+        return index + 1
+    }
+
+    private func installCommandShortcutMonitor(cards: [ClipboardCardSnapshot]) {
+#if os(macOS)
+        guard displayMode == .floatingPanel else {
+            return
+        }
+
+        uninstallCommandShortcutMonitor()
+        isCommandKeyPressed = Self.commandKeyIsPressed(in: NSEvent.modifierFlags)
+        commandShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { event in
+            switch event.type {
+            case .flagsChanged:
+                isCommandKeyPressed = Self.commandKeyIsPressed(in: event.modifierFlags)
+                return event
+            case .keyDown:
+                guard Self.commandKeyIsPressed(in: event.modifierFlags),
+                      let cardIndex = Self.cardShortcutIndex(for: event),
+                      cards.indices.contains(cardIndex) else {
+                    return event
+                }
+
+                copy(cards[cardIndex], shouldPaste: false)
+                return nil
+            default:
+                return event
+            }
+        }
+#else
+        _ = cards
+#endif
+    }
+
+    private func uninstallCommandShortcutMonitor() {
+#if os(macOS)
+        if let commandShortcutMonitor {
+            NSEvent.removeMonitor(commandShortcutMonitor)
+            self.commandShortcutMonitor = nil
+        }
+        isCommandKeyPressed = false
+#endif
+    }
+
+#if os(macOS)
+    private static func commandKeyIsPressed(in flags: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    }
+
+    private static func cardShortcutIndex(for event: NSEvent) -> Int? {
+        // Accept both the top-row number keys and numeric keypad keys so Cmd+1..9
+        // behaves consistently across compact and full-size keyboards.
+        switch event.keyCode {
+        case 18, 83:
+            0
+        case 19, 84:
+            1
+        case 20, 85:
+            2
+        case 21, 86:
+            3
+        case 23, 87:
+            4
+        case 22, 88:
+            5
+        case 26, 89:
+            6
+        case 28, 91:
+            7
+        case 25, 92:
+            8
+        default:
+            nil
+        }
+    }
+#endif
+
     private func copy(_ card: ClipboardCardSnapshot, shouldPaste: Bool) {
         ClipboardWriter.copyBack(card.item)
         selectedItemID = card.id
@@ -697,6 +789,7 @@ private struct ClipboardCard: View {
     let snapshot: ClipboardCardSnapshot
     let isSelected: Bool
     let isCopied: Bool
+    let shortcutNumber: Int?
     let selectAction: () -> Void
     let copyAction: () -> Void
     let deleteAction: () -> Void
@@ -793,9 +886,15 @@ private struct ClipboardCard: View {
                     )
                 )
         }
+        .overlay(alignment: .bottomTrailing) {
+            if let shortcutNumber {
+                shortcutBadge(shortcutNumber)
+            }
+        }
         .scaleEffect(isHovering ? 1.01 : 1)
         .animation(.easeOut(duration: 0.16), value: isHovering)
         .animation(.easeOut(duration: 0.16), value: isSelected)
+        .animation(.easeOut(duration: 0.10), value: shortcutNumber)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -806,6 +905,33 @@ private struct ClipboardCard: View {
             }
         }
         .help("Click to select. Double-click to copy. Right-click to delete.")
+    }
+
+    private func shortcutBadge(_ number: Int) -> some View {
+        Text("\(number)")
+            .font(.system(size: 13, weight: .heavy, design: .rounded))
+            .foregroundStyle(palette.primaryText)
+            .frame(width: 28, height: 28)
+            .background {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                palette.primary.opacity(0.98),
+                                palette.primary.opacity(0.74)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        Circle()
+                            .stroke(palette.edgeHighlight.opacity(0.70), lineWidth: 0.9)
+                    }
+            }
+            .shadow(color: palette.glassShadow.opacity(0.38), radius: 8, x: 0, y: 4)
+            .padding(10)
+            .accessibilityLabel("Shortcut \(number)")
     }
 
     private var cardHeader: some View {
