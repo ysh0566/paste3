@@ -36,6 +36,8 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ClipboardItem.createdAt, order: .reverse) private var items: [ClipboardItem]
+    @Query(sort: [SortDescriptor(\Pinboard.sortOrder), SortDescriptor(\Pinboard.createdAt, order: .forward)]) private var pinboards: [Pinboard]
+    @Query(sort: \PinnedClipboardItem.createdAt, order: .reverse) private var pinnedItems: [PinnedClipboardItem]
 
     private let displayMode: HistoryDisplayMode
     private let onDismiss: (() -> Void)?
@@ -44,6 +46,12 @@ struct ContentView: View {
     @State private var selectedFilter: ClipboardFilter = .all
     @State private var searchText = ""
     @State private var selectedItemID: UUID?
+    @State private var selectedPinboardID: UUID?
+    @State private var deletePinboard: Pinboard?
+    @State private var isShowingDeletePinboardAlert = false
+    @State private var draggingPinboardID: UUID?
+    @State private var lastReorderTargetPinboardID: UUID?
+    @State private var pinboardFrames: [UUID: CGRect] = [:]
     @State private var copiedItemID: UUID?
     @State private var isCommandKeyPressed = false
 #if os(macOS)
@@ -100,8 +108,27 @@ struct ContentView: View {
         let recentItems = items
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let referenceDate = Date()
+        let pinsByItemID = Dictionary(grouping: pinnedItems, by: \.clipboardItemID)
+        let sourceItems: [ClipboardItem]
 
-        let filteredItems = recentItems.filter { item in
+        if let selectedPinboardID {
+            // Pin records are stored separately from clipboard history, so the
+            // selected board view resolves pins back to the shared history items.
+            let boardPins = pinnedItems.filter { $0.pinboardID == selectedPinboardID }
+            var pinOrder: [UUID: Int] = [:]
+            for (index, pin) in boardPins.enumerated() where pinOrder[pin.clipboardItemID] == nil {
+                pinOrder[pin.clipboardItemID] = index
+            }
+            sourceItems = recentItems
+                .filter { pinOrder[$0.id] != nil }
+                .sorted { lhs, rhs in
+                    (pinOrder[lhs.id] ?? Int.max) < (pinOrder[rhs.id] ?? Int.max)
+                }
+        } else {
+            sourceItems = recentItems
+        }
+
+        let filteredItems = sourceItems.filter { item in
             selectedFilter.matches(item) &&
                 (trimmedQuery.isEmpty || ClipboardClassifier.matches(item, query: trimmedQuery))
         }
@@ -109,15 +136,26 @@ struct ContentView: View {
         // Build the card display strings once per body pass so rendering does not
         // redo filter and formatter work independently in every card.
         return HistorySnapshot(
-            recentCount: recentItems.count,
+            recentCount: sourceItems.count,
+            isPinboardSelected: selectedPinboardID != nil,
+            selectedPinboardName: selectedPinboard?.name,
             cards: filteredItems.map { item in
                 ClipboardCardSnapshot(
                     item: item,
                     detailText: ClipboardCardFormatters.detailText(for: item),
-                    createdAtText: ClipboardCardFormatters.relativeTimestamp(for: item.createdAt, relativeTo: referenceDate)
+                    createdAtText: ClipboardCardFormatters.relativeTimestamp(for: item.createdAt, relativeTo: referenceDate),
+                    pinnedPinboardIDs: Set((pinsByItemID[item.id] ?? []).map(\.pinboardID))
                 )
             }
         )
+    }
+
+    private var selectedPinboard: Pinboard? {
+        guard let selectedPinboardID else {
+            return nil
+        }
+
+        return pinboards.first { $0.id == selectedPinboardID }
     }
 
     var body: some View {
@@ -129,7 +167,7 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 header
-                historyContent(cards: snapshot.cards, recentCount: snapshot.recentCount)
+                historyContent(snapshot: snapshot)
                 footer(recentCount: snapshot.recentCount)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,6 +191,11 @@ struct ContentView: View {
             normalizeSelection(in: newIDs)
             installCommandShortcutMonitor(cards: snapshot.cards)
         }
+        .onChange(of: pinboards.map(\.id)) { _, pinboardIDs in
+            if let selectedPinboardID, !pinboardIDs.contains(selectedPinboardID) {
+                self.selectedPinboardID = nil
+            }
+        }
         .onKeyPress(.leftArrow) {
             moveSelection(.previous, in: cardIDs)
             return .handled
@@ -168,32 +211,43 @@ struct ContentView: View {
         .onExitCommand {
             onDismiss?()
         }
+        .alert("删除 Pinboard?", isPresented: $isShowingDeletePinboardAlert) {
+            Button("删除", role: .destructive, action: commitPinboardDelete)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只会删除 Pinboard 和其中的 pin 记录，不会删除剪贴板历史。")
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 16) {
+        GeometryReader { proxy in
+            let horizontalPadding: CGFloat = 24
+            let contentWidth = max(0, proxy.size.width - horizontalPadding * 2)
+            let pinboardMaxWidth = contentWidth / 2
+
             HStack(spacing: 16) {
-                Text("Paste3")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [palette.text, palette.secondaryText],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                HStack(spacing: 16) {
+                    Text("Paste3")
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [palette.text, palette.secondaryText],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
 
-                filterTabs
+                    filterTabs
+
+                    searchField
+                }
+
+                Spacer(minLength: 16)
+
+                pinboardBar(maxWidth: pinboardMaxWidth)
             }
-
-            Spacer(minLength: 16)
-
-            searchField
-
-            utilityButton(systemImage: "bolt.horizontal.circle", help: "Clipboard monitor is running") {}
-                .disabled(true)
+            .padding(.horizontal, horizontalPadding)
         }
-        .padding(.horizontal, 24)
         .frame(height: 64)
         .background {
             Rectangle()
@@ -223,11 +277,127 @@ struct ContentView: View {
         }
     }
 
+    private func pinboardBar(maxWidth: CGFloat) -> some View {
+        ViewThatFits(in: .horizontal) {
+            pinboardControls(isScrollable: false, listWidth: maxWidth)
+            pinboardControls(isScrollable: true, listWidth: maxWidth)
+        }
+        .frame(maxWidth: maxWidth, alignment: .trailing)
+    }
+
+    private func pinboardControls(isScrollable: Bool, listWidth: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            pinboardList(isScrollable: isScrollable, listWidth: listWidth)
+
+            Button(action: createPinboard) {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("新建 Pinboard")
+        }
+    }
+
+    @ViewBuilder
+    private func pinboardList(isScrollable: Bool, listWidth: CGFloat) -> some View {
+        if isScrollable {
+            ScrollView(.horizontal) {
+                pinboardChipRow
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+            .frame(width: max(0, listWidth - 44))
+        } else {
+            pinboardChipRow
+        }
+    }
+
+    private var pinboardChipRow: some View {
+        HStack(spacing: 10) {
+            ForEach(pinboards) { pinboard in
+                PinboardChip(
+                    pinboard: pinboard,
+                    isSelected: selectedPinboardID == pinboard.id,
+                    isDragging: draggingPinboardID == pinboard.id,
+                    selectAction: {
+                        selectedPinboardID = pinboard.id
+                        focusHistory()
+                    },
+                    renameAction: { name in
+                        rename(pinboard, to: name)
+                    },
+                    deleteAction: {
+                        beginPinboardDelete(pinboard)
+                    },
+                    setColorAction: { color in
+                        setColor(color, for: pinboard)
+                    }
+                )
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: PinboardFramePreferenceKey.self,
+                            value: [pinboard.id: proxy.frame(in: .named("pinboardRow"))]
+                        )
+                    }
+                }
+            }
+        }
+        .coordinateSpace(name: "pinboardRow")
+        .gesture(pinboardReorderGesture)
+        .onPreferenceChange(PinboardFramePreferenceKey.self) { frames in
+            pinboardFrames = frames
+        }
+    }
+
+    private var pinboardReorderGesture: some Gesture {
+        // Long press marks reorder intent; drag locations are then matched against
+        // measured chip frames so the gesture also works inside the horizontal list.
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 4, coordinateSpace: .named("pinboardRow")))
+            .onChanged { value in
+                guard case let .second(true, drag?) = value else {
+                    return
+                }
+
+                if draggingPinboardID == nil {
+                    draggingPinboardID = pinboardID(at: drag.startLocation)
+                }
+
+                guard let draggingPinboardID,
+                      let targetPinboardID = pinboardID(at: drag.location),
+                      targetPinboardID != draggingPinboardID,
+                      targetPinboardID != lastReorderTargetPinboardID,
+                      let draggingPinboard = pinboards.first(where: { $0.id == draggingPinboardID }),
+                      let targetPinboard = pinboards.first(where: { $0.id == targetPinboardID })
+                else {
+                    return
+                }
+
+                lastReorderTargetPinboardID = targetPinboardID
+                swapPinboard(draggingPinboard, with: targetPinboard)
+            }
+            .onEnded { _ in
+                draggingPinboardID = nil
+                lastReorderTargetPinboardID = nil
+            }
+    }
+
+    private func pinboardID(at location: CGPoint) -> UUID? {
+        pinboardFrames.first { _, frame in
+            frame.contains(location)
+        }?.key
+    }
+
     private var filterTabs: some View {
         HStack(spacing: 2) {
             ForEach(ClipboardFilter.allCases) { filter in
                 Button {
                     selectedFilter = filter
+                    selectedPinboardID = nil
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: filter.systemImage)
@@ -288,10 +458,83 @@ struct ContentView: View {
         )
     }
 
+    private func createPinboard() {
+        do {
+            let pinboard = try PinboardStore(modelContext: modelContext).createPinboard(existingCount: pinboards.count)
+            selectedPinboardID = pinboard.id
+            focusHistory()
+        } catch {
+            assertionFailure("Failed to create pinboard: \(error)")
+        }
+    }
+
+    private func beginPinboardDelete(_ pinboard: Pinboard) {
+        deletePinboard = pinboard
+        isShowingDeletePinboardAlert = true
+    }
+
+    private func rename(_ pinboard: Pinboard, to name: String) {
+        do {
+            try PinboardStore(modelContext: modelContext).rename(pinboard, to: name)
+        } catch {
+            assertionFailure("Failed to rename pinboard: \(error)")
+        }
+    }
+
+    private func setColor(_ color: PinboardColor, for pinboard: Pinboard) {
+        do {
+            try PinboardStore(modelContext: modelContext).setColor(color, for: pinboard)
+        } catch {
+            assertionFailure("Failed to set pinboard color: \(error)")
+        }
+    }
+
+    private func swapPinboard(_ lhs: Pinboard, with rhs: Pinboard) {
+        do {
+            try PinboardStore(modelContext: modelContext).swap(lhs, with: rhs, in: pinboards)
+        } catch {
+            assertionFailure("Failed to reorder pinboards: \(error)")
+        }
+    }
+
+    private func commitPinboardDelete() {
+        guard let deletePinboard else {
+            return
+        }
+
+        do {
+            if selectedPinboardID == deletePinboard.id {
+                selectedPinboardID = nil
+            }
+            try PinboardStore(modelContext: modelContext).delete(deletePinboard)
+            self.deletePinboard = nil
+        } catch {
+            assertionFailure("Failed to delete pinboard: \(error)")
+        }
+    }
+
+    private func pin(_ item: ClipboardItem, to pinboard: Pinboard) {
+        do {
+            try PinboardStore(modelContext: modelContext).pin(item, to: pinboard)
+        } catch {
+            assertionFailure("Failed to pin clipboard item: \(error)")
+        }
+    }
+
+    private func unpin(_ item: ClipboardItem, from pinboard: Pinboard) {
+        do {
+            try PinboardStore(modelContext: modelContext).unpin(item, from: pinboard)
+        } catch {
+            assertionFailure("Failed to unpin clipboard item: \(error)")
+        }
+    }
+
     @ViewBuilder
-    private func historyContent(cards: [ClipboardCardSnapshot], recentCount: Int) -> some View {
+    private func historyContent(snapshot: HistorySnapshot) -> some View {
+        let cards = snapshot.cards
+
         if cards.isEmpty {
-            emptyState(recentCount: recentCount)
+            emptyState(snapshot: snapshot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .frame(minHeight: HistoryLayout.cardContentHeight)
         } else {
@@ -316,6 +559,14 @@ struct ContentView: View {
                                         selectedItemID = nil
                                     }
                                     delete(card.item)
+                                },
+                                pinboards: pinboards,
+                                selectedPinboard: selectedPinboard,
+                                pinAction: { pinboard in
+                                    pin(card.item, to: pinboard)
+                                },
+                                unpinAction: { pinboard in
+                                    unpin(card.item, from: pinboard)
                                 }
                             )
                             .id(card.id)
@@ -340,24 +591,24 @@ struct ContentView: View {
         }
     }
 
-    private func emptyState(recentCount: Int) -> some View {
+    private func emptyState(snapshot: HistorySnapshot) -> some View {
         VStack(spacing: 14) {
             ZStack {
                 Circle()
                     .fill(palette.primary.opacity(colorScheme == .dark ? 0.18 : 0.12))
                     .frame(width: 62, height: 62)
 
-                Image(systemName: recentCount == 0 ? ClipboardFilter.all.emptyStateImage : selectedFilter.emptyStateImage)
+                Image(systemName: snapshot.recentCount == 0 ? ClipboardFilter.all.emptyStateImage : selectedFilter.emptyStateImage)
                     .font(.system(size: 28, weight: .light))
                     .foregroundStyle(palette.primary)
             }
 
             VStack(spacing: 5) {
-                Text(emptyStateTitle(recentCount: recentCount))
+                Text(emptyStateTitle(snapshot: snapshot))
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.text)
 
-                Text(emptyStateMessage(recentCount: recentCount))
+                Text(emptyStateMessage(snapshot: snapshot))
                     .font(.system(size: 13))
                     .foregroundStyle(palette.secondaryText)
                     .multilineTextAlignment(.center)
@@ -369,20 +620,28 @@ struct ContentView: View {
         .frame(maxWidth: 420)
     }
 
-    private func emptyStateTitle(recentCount: Int) -> String {
+    private func emptyStateTitle(snapshot: HistorySnapshot) -> String {
+        if snapshot.isPinboardSelected && snapshot.recentCount == 0 {
+            return "Pinboard 为空"
+        }
+
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "No matching clips"
         }
 
-        return recentCount == 0 ? ClipboardFilter.all.emptyTitle : selectedFilter.emptyTitle
+        return snapshot.recentCount == 0 ? ClipboardFilter.all.emptyTitle : selectedFilter.emptyTitle
     }
 
-    private func emptyStateMessage(recentCount: Int) -> String {
+    private func emptyStateMessage(snapshot: HistorySnapshot) -> String {
+        if snapshot.isPinboardSelected && snapshot.recentCount == 0 {
+            return "点击左侧分类回到历史后，在卡片上右键将内容 pin 到 \(snapshot.selectedPinboardName ?? "这个 Pinboard")。"
+        }
+
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Try a different search term or switch to another category."
         }
 
-        if recentCount > 0 {
+        if snapshot.recentCount > 0 {
             return "Switch to All Items to browse the rest of your clipboard history."
         }
 
@@ -436,22 +695,6 @@ struct ContentView: View {
                 .fill(palette.edgeHighlight.opacity(colorScheme == .dark ? 0.16 : 0.44))
                 .frame(height: 0.5)
         }
-    }
-
-    private func utilityButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(palette.secondaryText)
-                .frame(width: 32, height: 32)
-                .paste3GlassSurface(
-                    cornerRadius: Paste3Theme.controlRadius,
-                    fill: palette.insetFill.opacity(0.30)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help(help)
     }
 
     private func delete(_ item: ClipboardItem) {
@@ -740,6 +983,8 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
 
 private struct HistorySnapshot {
     let recentCount: Int
+    let isPinboardSelected: Bool
+    let selectedPinboardName: String?
     let cards: [ClipboardCardSnapshot]
 }
 
@@ -749,6 +994,7 @@ private struct ClipboardCardSnapshot: Identifiable {
     let item: ClipboardItem
     let detailText: String
     let createdAtText: String
+    let pinnedPinboardIDs: Set<UUID>
 }
 
 @MainActor
@@ -783,6 +1029,174 @@ private enum ClipboardCardFormatters {
     }
 }
 
+private struct PinboardChip: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let pinboard: Pinboard
+    let isSelected: Bool
+    let isDragging: Bool
+    let selectAction: () -> Void
+    let renameAction: (String) -> Void
+    let deleteAction: () -> Void
+    let setColorAction: (PinboardColor) -> Void
+
+    @State private var isRenaming = false
+    @State private var draftName = ""
+    @State private var shouldSkipBlurCommit = false
+    @FocusState private var renameFieldIsFocused: Bool
+
+    private var palette: Paste3Theme.Palette {
+        Paste3Theme.palette(for: colorScheme)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(pinboard.colorKind.color)
+                .frame(width: 12, height: 12)
+                .overlay {
+                    Circle()
+                        .stroke(palette.edgeHighlight.opacity(0.70), lineWidth: 0.7)
+                }
+
+            if isRenaming {
+                TextField("未命名", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .focused($renameFieldIsFocused)
+                    .frame(width: renameFieldWidth, height: 20)
+                    .onSubmit(commitRename)
+                    .onExitCommand(perform: cancelRename)
+            } else {
+                Text(pinboard.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? palette.text : palette.secondaryText)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background {
+            Capsule()
+                .fill(isSelected || isRenaming ? palette.insetFill.opacity(0.92) : Color.clear)
+        }
+        .overlay {
+            if isRenaming {
+                Capsule()
+                    .stroke(pinboard.colorKind.color.opacity(0.70), lineWidth: 1.8)
+            } else if isDragging {
+                Capsule()
+                    .stroke(pinboard.colorKind.color.opacity(0.55), lineWidth: 1.4)
+            }
+        }
+        .scaleEffect(isDragging ? 0.96 : 1)
+        .opacity(isDragging ? 0.76 : 1)
+        .contentShape(Capsule())
+        .gesture(
+            // Keep single-select and double-rename mutually exclusive so a double click does not also run selection.
+            TapGesture(count: 2)
+                .onEnded(beginRename)
+                .exclusively(before: TapGesture().onEnded {
+                    guard !isRenaming else {
+                        return
+                    }
+
+                    selectAction()
+                })
+        )
+        .onChange(of: renameFieldIsFocused) { _, isFocused in
+            guard isRenaming, !isFocused else {
+                return
+            }
+
+            if shouldSkipBlurCommit {
+                shouldSkipBlurCommit = false
+            } else {
+                commitRename()
+            }
+        }
+        .onChange(of: pinboard.name) { _, newName in
+            if !isRenaming {
+                draftName = newName
+            }
+        }
+        .contextMenu {
+            Button(action: beginRename) {
+                Label("重命名", systemImage: "pencil")
+            }
+
+            Button(role: .destructive, action: deleteAction) {
+                Label("删除...", systemImage: "trash")
+            }
+
+            Divider()
+
+            Picker(
+                "",
+                selection: Binding(
+                    get: { pinboard.colorKind },
+                    set: setColorAction
+                )
+            ) {
+                ForEach(PinboardColor.allCases) { color in
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(color.color)
+                        .frame(width: 16, height: 16)
+                        .tag(color)
+                        .help(color.title)
+                }
+            }
+            .pickerStyle(.palette)
+            .controlSize(.mini)
+            .labelsHidden()
+        }
+        .help("点击查看 Pinboard，双击重命名，右键选择颜色")
+    }
+
+    private var renameFieldWidth: CGFloat {
+        let characterWidth: CGFloat = 8
+        let width = CGFloat(max(draftName.count, 3)) * characterWidth + 14
+        return min(max(width, 42), 150)
+    }
+
+    private func beginRename() {
+        draftName = pinboard.name
+        isRenaming = true
+
+        DispatchQueue.main.async {
+            renameFieldIsFocused = true
+        }
+    }
+
+    private func commitRename() {
+        guard isRenaming else {
+            return
+        }
+
+        renameAction(draftName)
+        isRenaming = false
+        renameFieldIsFocused = false
+    }
+
+    private func cancelRename() {
+        shouldSkipBlurCommit = true
+        draftName = pinboard.name
+        isRenaming = false
+        renameFieldIsFocused = false
+    }
+}
+
+private struct PinboardFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
 private struct ClipboardCard: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -793,6 +1207,10 @@ private struct ClipboardCard: View {
     let selectAction: () -> Void
     let copyAction: () -> Void
     let deleteAction: () -> Void
+    let pinboards: [Pinboard]
+    let selectedPinboard: Pinboard?
+    let pinAction: (Pinboard) -> Void
+    let unpinAction: (Pinboard) -> Void
 
     @State private var isHovering = false
 
@@ -900,11 +1318,39 @@ private struct ClipboardCard: View {
         }
         .gesture(tapGesture)
         .contextMenu {
+            if !pinboards.isEmpty {
+                Menu("Pin 到 Pinboard") {
+                    ForEach(pinboards) { pinboard in
+                        Button {
+                            pinAction(pinboard)
+                        } label: {
+                            Label(
+                                pinboard.name,
+                                systemImage: snapshot.pinnedPinboardIDs.contains(pinboard.id) ? "checkmark.circle.fill" : "pin"
+                            )
+                        }
+                        .disabled(snapshot.pinnedPinboardIDs.contains(pinboard.id))
+                    }
+                }
+            }
+
+            if let selectedPinboard, snapshot.pinnedPinboardIDs.contains(selectedPinboard.id) {
+                Button {
+                    unpinAction(selectedPinboard)
+                } label: {
+                    Label("从当前 Pinboard 移除", systemImage: "pin.slash")
+                }
+            }
+
+            if !pinboards.isEmpty || selectedPinboard != nil {
+                Divider()
+            }
+
             Button(role: .destructive, action: deleteAction) {
                 Label("Delete", systemImage: "trash")
             }
         }
-        .help("Click to select. Double-click to copy. Right-click to delete.")
+        .help("Click to select. Double-click to copy. Right-click to pin or delete.")
     }
 
     private func shortcutBadge(_ number: Int) -> some View {
@@ -1398,5 +1844,5 @@ extension ClipboardKind {
 
 #Preview {
     ContentView()
-        .modelContainer(for: ClipboardItem.self, inMemory: true)
+        .modelContainer(for: [ClipboardItem.self, Pinboard.self, PinnedClipboardItem.self], inMemory: true)
 }

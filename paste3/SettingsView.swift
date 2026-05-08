@@ -758,6 +758,6 @@ private struct SettingsColors {
 
 #Preview {
     SettingsView()
-        .modelContainer(for: ClipboardItem.self, inMemory: true)
+        .modelContainer(for: [ClipboardItem.self, Pinboard.self, PinnedClipboardItem.self], inMemory: true)
 }
 #endif

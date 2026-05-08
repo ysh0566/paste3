@@ -179,6 +179,81 @@ struct paste3Tests {
         #expect(item.payloadType == "public.test-data")
     }
 
+    @Test func pinboardStoreCreatesRenamesAndColorsBoard() throws {
+        let context = try makeContext()
+        let store = PinboardStore(modelContext: context)
+
+        let pinboard = try store.createPinboard(existingCount: 2)
+        try store.rename(pinboard, to: " 实用链接 ")
+        try store.setColor(.purple, for: pinboard)
+
+        #expect(pinboard.name == "实用链接")
+        #expect(pinboard.colorKind == .purple)
+        #expect(pinboard.sortOrder == 2)
+    }
+
+    @Test func pinboardStoreSwapsBoardOrder() throws {
+        let context = try makeContext()
+        let store = PinboardStore(modelContext: context)
+        let first = try store.createPinboard(existingCount: 0)
+        let second = try store.createPinboard(existingCount: 1)
+        let third = try store.createPinboard(existingCount: 2)
+
+        try store.swap(first, with: third, in: [first, second, third])
+
+        let descriptor = FetchDescriptor<Pinboard>(
+            sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
+        )
+        let boards = try context.fetch(descriptor)
+
+        #expect(boards.map(\.id) == [third.id, second.id, first.id])
+        #expect(boards.map(\.sortOrder) == [0, 1, 2])
+    }
+
+    @Test func pinboardStorePinsClipboardItemOnlyOnce() throws {
+        let context = try makeContext()
+        let clipboardStore = ClipboardStore(modelContext: context)
+        let pinboardStore = PinboardStore(modelContext: context)
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: "https://developer.apple.com",
+            source: ClipboardSource(appName: "Safari", bundleIdentifier: "com.apple.Safari")
+        ))
+        let item = try #require(try clipboardStore.insert(candidate))
+        let pinboard = try pinboardStore.createPinboard(existingCount: 0)
+
+        let firstPin = try pinboardStore.pin(item, to: pinboard)
+        let secondPin = try pinboardStore.pin(item, to: pinboard)
+        let pins = try context.fetch(FetchDescriptor<PinnedClipboardItem>())
+
+        #expect(firstPin)
+        #expect(!secondPin)
+        #expect(pins.count == 1)
+        #expect(pins[0].pinboardID == pinboard.id)
+        #expect(pins[0].clipboardItemID == item.id)
+    }
+
+    @Test func pinboardStoreDeleteRemovesPinsOnly() throws {
+        let context = try makeContext()
+        let clipboardStore = ClipboardStore(modelContext: context)
+        let pinboardStore = PinboardStore(modelContext: context)
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: "pin me",
+            source: ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+        ))
+        let item = try #require(try clipboardStore.insert(candidate))
+        let pinboard = try pinboardStore.createPinboard(existingCount: 0)
+        try pinboardStore.pin(item, to: pinboard)
+
+        try pinboardStore.delete(pinboard)
+
+        let boards = try context.fetch(FetchDescriptor<Pinboard>())
+        let pins = try context.fetch(FetchDescriptor<PinnedClipboardItem>())
+        let items = try clipboardStore.items()
+        #expect(boards.isEmpty)
+        #expect(pins.isEmpty)
+        #expect(items.map(\.id) == [item.id])
+    }
+
     @Test func classifierRejectsOversizedPayload() {
         let payload = Data(repeating: 0, count: ClipboardClassifier.maxStoredPayloadBytes + 1)
         let candidate = ClipboardClassifier.candidate(
@@ -317,9 +392,14 @@ struct paste3Tests {
     }
 
     private func makeContext() throws -> ModelContext {
+        let schema = Schema([
+            ClipboardItem.self,
+            Pinboard.self,
+            PinnedClipboardItem.self,
+        ])
         let container = try ModelContainer(
-            for: ClipboardItem.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         return ModelContext(container)
     }
