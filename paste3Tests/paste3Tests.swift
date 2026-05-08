@@ -223,6 +223,27 @@ struct paste3Tests {
         #expect(candidate.payloadType == payloadType.rawValue)
         #expect(candidate.payloadData == payload)
     }
+
+    @Test func quickPanelShortcutFallsBackToCommandShiftV() {
+        #expect(QuickPanelShortcut.find(id: "missing") == .commandShiftV)
+        #expect(QuickPanelShortcut.defaultShortcut.displayName == "⌘⇧V")
+    }
+
+    @Test func quickPanelShortcutPreferencePersistsSelection() throws {
+        let suiteName = "paste3Tests.shortcuts.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preference = QuickPanelShortcutPreference(defaults: defaults)
+        #expect(preference.shortcut == .commandShiftV)
+
+        preference.setShortcut(.commandOptionV)
+
+        let reloadedPreference = QuickPanelShortcutPreference(defaults: defaults)
+        #expect(reloadedPreference.shortcut == .commandOptionV)
+    }
 #endif
 
     @Test func storePrunesAboveLimit() throws {

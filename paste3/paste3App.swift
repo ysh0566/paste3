@@ -17,7 +17,8 @@ struct paste3App: App {
     var body: some Scene {
 #if os(macOS)
         Settings {
-            EmptyView()
+            SettingsView()
+                .modelContainer(Paste3ModelContainer.shared)
         }
 #else
         WindowGroup(id: Paste3WindowID.history) {

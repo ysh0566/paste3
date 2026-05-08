@@ -13,16 +13,22 @@ import SwiftData
 final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
     private var monitor: ClipboardMonitor?
     private var statusItem: NSStatusItem?
+    private let shortcutPreference = QuickPanelShortcutPreference.shared
+    private lazy var hotKeyRegistrar = QuickPanelHotKeyRegistrar { [weak self] in
+        self?.toggleQuickPanel()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep paste3 as a menu bar utility even when launched from Xcode or a stale bundle.
         NSApp.setActivationPolicy(.accessory)
         startClipboardMonitorIfNeeded()
+        startQuickPanelHotKey()
         setupStatusItem()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.stop()
+        hotKeyRegistrar.stop()
     }
 
     private func startClipboardMonitorIfNeeded() {
@@ -58,7 +64,7 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else {
-            QuickPanelController.shared.toggle()
+            toggleQuickPanel()
             return
         }
 
@@ -66,8 +72,19 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         case .rightMouseUp:
             showStatusMenu()
         default:
-            QuickPanelController.shared.toggle()
+            toggleQuickPanel()
         }
+    }
+
+    private func startQuickPanelHotKey() {
+        shortcutPreference.onChange = { [weak self] shortcut in
+            self?.hotKeyRegistrar.update(shortcut: shortcut)
+        }
+        hotKeyRegistrar.start(shortcut: shortcutPreference.shortcut)
+    }
+
+    private func toggleQuickPanel() {
+        QuickPanelController.shared.toggle()
     }
 
     private func showStatusMenu() {
@@ -84,26 +101,19 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
+        let currentShortcut = shortcutPreference.shortcut
 
-        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
-        let settingsMenu = NSMenu()
-        settingsMenu.addItem(
-            withTitle: "Clear History",
-            action: #selector(clearHistory),
-            keyEquivalent: ""
+        let quickPanelItem = NSMenuItem(
+            title: "Quick Panel",
+            action: #selector(showQuickPanel),
+            keyEquivalent: currentShortcut.keyEquivalent
         )
-        settingsMenu.items.last?.target = self
+        quickPanelItem.keyEquivalentModifierMask = currentShortcut.keyEquivalentModifierMask
+        quickPanelItem.target = self
+        menu.addItem(quickPanelItem)
 
-        let accessibilityItem = NSMenuItem(
-            title: AccessibilityPermission.isTrusted ? "Accessibility Permission Granted" : "Request Accessibility Permission",
-            action: #selector(requestAccessibilityPermission),
-            keyEquivalent: ""
-        )
-        accessibilityItem.target = self
-        accessibilityItem.isEnabled = !AccessibilityPermission.isTrusted
-        settingsMenu.addItem(accessibilityItem)
-
-        settingsItem.submenu = settingsMenu
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
@@ -114,16 +124,12 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    @objc private func clearHistory() {
-        do {
-            try ClipboardStore(modelContext: Paste3ModelContainer.shared.mainContext).deleteAll()
-        } catch {
-            assertionFailure("Failed to clear clipboard history: \(error)")
-        }
+    @objc private func showQuickPanel() {
+        QuickPanelController.shared.show()
     }
 
-    @objc private func requestAccessibilityPermission() {
-        AccessibilityPermission.requestPromptAndOpenSettingsIfNeeded()
+    @objc private func openSettings() {
+        SettingsWindowController.shared.show()
     }
 
     @objc private func quit() {

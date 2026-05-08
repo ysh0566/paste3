@@ -164,7 +164,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(spacing: 16) {
             HStack(spacing: 16) {
-                Text("ClipFlow")
+                Text("Paste3")
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundStyle(palette.text)
 
