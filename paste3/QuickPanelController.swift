@@ -14,10 +14,10 @@ import SwiftUI
 final class QuickPanelController {
     static let shared = QuickPanelController()
 
-    private static let screenHeightRatio: CGFloat = 0.28
-    private static let horizontalScreenInset: CGFloat = 16
-    private static let minimumPanelSize = CGSize(width: 760, height: 358)
-    private static let maximumPanelHeight: CGFloat = 380
+    private static let screenHeightRatio: CGFloat = 0.32
+    private static let horizontalScreenInset: CGFloat = 14
+    private static let minimumPanelSize = CGSize(width: 820, height: 400)
+    private static let maximumPanelHeight: CGFloat = 420
     private static let pasteKeyVirtualCode: CGKeyCode = 0x09
 
     private var panel: NSPanel?

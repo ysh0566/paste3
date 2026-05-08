@@ -65,8 +65,7 @@ struct ContentView: View {
     private var outerBackground: some View {
         switch displayMode {
         case .window:
-            palette.background
-                .ignoresSafeArea()
+            Paste3LiquidBackdrop(palette: palette)
         case .floatingPanel:
             Color.clear
         }
@@ -166,7 +165,13 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 Text("Paste3")
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .foregroundStyle(palette.text)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [palette.text, palette.secondaryText],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
 
                 filterTabs
             }
@@ -179,11 +184,31 @@ struct ContentView: View {
                 .disabled(true)
         }
         .padding(.horizontal, 24)
-        .frame(height: 56)
-        .background(palette.topBarFill)
+        .frame(height: 64)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            palette.edgeHighlight.opacity(colorScheme == .dark ? 0.10 : 0.36),
+                            palette.topBarFill,
+                            palette.glassGlow.opacity(0.20)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+        }
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(palette.border)
+                .fill(
+                    LinearGradient(
+                        colors: [palette.edgeHighlight.opacity(0.65), palette.border.opacity(0.40)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
                 .frame(height: 0.5)
         }
     }
@@ -202,20 +227,35 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selectedFilter == filter ? palette.primaryText : palette.secondaryText)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 6)
                     .background {
-                        Capsule()
-                            .fill(selectedFilter == filter ? palette.primary : Color.clear)
+                        if selectedFilter == filter {
+                            Capsule()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            palette.primary.opacity(0.94),
+                                            palette.primary.opacity(0.70)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(alignment: .topLeading) {
+                                    Capsule()
+                                        .stroke(palette.edgeHighlight.opacity(0.55), lineWidth: 0.8)
+                                }
+                        }
                     }
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(2)
-        .background {
-            Capsule()
-                .fill(colorScheme == .dark ? Color.black.opacity(0.22) : Color.black.opacity(0.05))
-        }
+        .paste3GlassSurface(
+            cornerRadius: 18,
+            fill: colorScheme == .dark ? Color.black.opacity(0.18) : Color.white.opacity(0.20)
+        )
     }
 
     private var searchField: some View {
@@ -230,15 +270,11 @@ struct ContentView: View {
                 .foregroundStyle(palette.text)
         }
         .padding(.horizontal, 10)
-        .frame(width: 230, height: 32)
-        .background {
-            RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                .fill(palette.insetFill.opacity(colorScheme == .dark ? 0.72 : 1))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                .stroke(palette.border, lineWidth: 0.5)
-        }
+        .frame(width: 238, height: 34)
+        .paste3GlassSurface(
+            cornerRadius: Paste3Theme.controlRadius,
+            fill: palette.insetFill.opacity(colorScheme == .dark ? 0.82 : 0.70)
+        )
     }
 
     @ViewBuilder
@@ -274,7 +310,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal, 24)
-                    .padding(.vertical, HistoryLayout.cardVerticalInset)
+                    .padding(.vertical, 16)
                 }
                 .scrollIndicators(.hidden)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -369,11 +405,24 @@ struct ContentView: View {
                 .foregroundStyle(palette.tertiaryText)
         }
         .padding(.horizontal, 24)
-        .frame(height: 42)
-        .background(palette.topBarFill.opacity(0.78))
+        .frame(height: 46)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            palette.topBarFill.opacity(0.88),
+                            palette.glassGlow.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+        }
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(palette.border)
+                .fill(palette.edgeHighlight.opacity(colorScheme == .dark ? 0.16 : 0.44))
                 .frame(height: 0.5)
         }
     }
@@ -383,11 +432,11 @@ struct ContentView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(palette.secondaryText)
-                .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
-                        .fill(Color.clear)
-                }
+                .frame(width: 32, height: 32)
+                .paste3GlassSurface(
+                    cornerRadius: Paste3Theme.controlRadius,
+                    fill: palette.insetFill.opacity(0.30)
+                )
         }
         .buttonStyle(.plain)
         .help(help)
@@ -665,14 +714,14 @@ private struct ClipboardCard: View {
 
     private var cardFill: Color {
         if isCopied {
-            return Paste3Theme.success.opacity(0.12)
+            return Paste3Theme.success.opacity(colorScheme == .dark ? 0.18 : 0.14)
         }
 
         if isSelected {
-            return palette.primary.opacity(0.14)
+            return palette.primary.opacity(colorScheme == .dark ? 0.18 : 0.12)
         }
 
-        return isHovering ? palette.primary.opacity(0.10) : palette.cardFill
+        return isHovering ? palette.primary.opacity(colorScheme == .dark ? 0.13 : 0.10) : palette.cardFill
     }
 
     private var cardStroke: Color {
@@ -712,16 +761,28 @@ private struct ClipboardCard: View {
             cardFooter
         }
         .frame(width: HistoryLayout.cardSide, height: HistoryLayout.cardSide, alignment: .topLeading)
-        .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous))
-        .background {
-            RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .fill(cardFill)
-        }
+        .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous))
+        .paste3GlassSurface(
+            cornerRadius: Paste3Theme.cardRadius,
+            fill: cardFill,
+            isProminent: isSelected || isHovering || isCopied
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
+            RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous)
                 .stroke(cardStroke, lineWidth: isSelected ? 1.5 : 0.7)
         }
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.05), radius: 12, x: 0, y: 6)
+        .overlay(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous)
+                .stroke(palette.edgeHighlight.opacity(colorScheme == .dark ? 0.12 : 0.40), lineWidth: 1)
+                .padding(1)
+                .mask(
+                    LinearGradient(
+                        colors: [.black, .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        }
         .scaleEffect(isHovering ? 1.01 : 1)
         .animation(.easeOut(duration: 0.16), value: isHovering)
         .animation(.easeOut(duration: 0.16), value: isSelected)
@@ -759,6 +820,10 @@ private struct ClipboardCard: View {
                 .background {
                     Circle()
                         .fill(.white.opacity(0.18))
+                        .overlay {
+                            Circle()
+                                .stroke(.white.opacity(0.34), lineWidth: 0.8)
+                        }
                 }
                 .overlay(alignment: .topTrailing) {
                     if isCopied {
@@ -772,21 +837,38 @@ private struct ClipboardCard: View {
         .padding(.horizontal, 14)
         .frame(height: headerHeight)
         .background {
-            RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .fill(headerFill)
+            RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            headerFill.opacity(0.92),
+                            headerFill.opacity(0.70),
+                            .white.opacity(colorScheme == .dark ? 0.07 : 0.18)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(alignment: .topLeading) {
+                    LinearGradient(
+                        colors: [.white.opacity(0.42), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .center
+                    )
+                }
                 .overlay(alignment: .trailing) {
                     Circle()
-                        .stroke(.white.opacity(0.24), lineWidth: 1)
-                        .frame(width: 72, height: 72)
-                        .offset(x: 20)
+                        .stroke(.white.opacity(0.26), lineWidth: 1)
+                        .frame(width: 78, height: 78)
+                        .offset(x: 24)
                 }
         }
         .clipShape(
             UnevenRoundedRectangle(
-                topLeadingRadius: Paste3Theme.radius,
+                topLeadingRadius: Paste3Theme.cardRadius,
                 bottomLeadingRadius: 0,
                 bottomTrailingRadius: 0,
-                topTrailingRadius: Paste3Theme.radius,
+                topTrailingRadius: Paste3Theme.cardRadius,
                 style: .continuous
             )
         )
@@ -843,7 +925,7 @@ private struct ClipboardCard: View {
 
     private var contentText: some View {
         Text(snapshot.item.text)
-            .font(snapshot.item.kind == .command ? .system(size: 12, weight: .semibold, design: .monospaced) : .system(size: 13, weight: .semibold))
+            .font(snapshot.item.kind == .command ? .system(size: 12, weight: .semibold, design: .monospaced) : .system(size: 13, weight: .medium))
             .foregroundStyle(palette.text)
             .lineSpacing(2)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -890,6 +972,10 @@ private struct ClipboardCard: View {
                 .frame(width: imagePreviewSize.width, height: imagePreviewSize.height)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous)
+                        .stroke(palette.edgeHighlight.opacity(0.42), lineWidth: 0.8)
+                }
                 .padding(previewPadding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()

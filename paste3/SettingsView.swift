@@ -24,15 +24,20 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
+        ZStack {
+            Paste3LiquidBackdrop(palette: colors.palette)
 
-            Divider()
+            HStack(spacing: 0) {
+                sidebar
 
-            mainContent
+                Rectangle()
+                    .fill(colors.edgeHighlight.opacity(colorScheme == .dark ? 0.12 : 0.42))
+                    .frame(width: 0.7)
+
+                mainContent
+            }
         }
         .frame(width: 900, height: 640)
-        .background(colors.windowBackground)
         .onAppear(perform: refreshState)
         .onChange(of: selectedShortcutID) { _, shortcutID in
             QuickPanelShortcutPreference.shared.setShortcut(QuickPanelShortcut.find(id: shortcutID))
@@ -51,10 +56,10 @@ struct SettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            windowDots
-                .padding(.top, 20)
+            sidebarHeader
+                .padding(.top, 52)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 22)
+                .padding(.bottom, 18)
 
             VStack(spacing: 6) {
                 ForEach(SettingsTab.primaryTabs) { tab in
@@ -82,21 +87,52 @@ struct SettingsView: View {
             .padding(.bottom, 28)
         }
         .frame(width: 250)
-        .background(colors.sidebarBackground)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            colors.edgeHighlight.opacity(colorScheme == .dark ? 0.06 : 0.28),
+                            colors.sidebarBackground,
+                            colors.glow.opacity(0.16)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+        }
     }
 
-    private var windowDots: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(Color(red: 1.0, green: 0.37, blue: 0.35))
-                .frame(width: 14, height: 14)
-            Circle()
-                .fill(Color(red: 1.0, green: 0.76, blue: 0.18))
-                .frame(width: 14, height: 14)
-            Circle()
-                .fill(Color(red: 0.78, green: 0.79, blue: 0.80))
-                .frame(width: 14, height: 14)
+    private var sidebarHeader: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(colors.accent)
+                .frame(width: 30, height: 30)
+                .paste3GlassSurface(
+                    cornerRadius: 12,
+                    fill: colors.controlBackground.opacity(0.48)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("paste3")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(colors.primaryText)
+
+                Text("设置")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(colors.secondaryText)
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .paste3GlassSurface(
+            cornerRadius: Paste3Theme.controlRadius,
+            fill: colors.cardBackground.opacity(0.28)
+        )
     }
 
     private var mainContent: some View {
@@ -104,7 +140,13 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 28) {
                 Text(selectedTab.title)
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(colors.primaryText)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [colors.primaryText, colors.secondaryText],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .padding(.top, 32)
 
                 selectedContent
@@ -114,7 +156,20 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
-        .background(colors.contentBackground)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            colors.contentBackground.opacity(0.74),
+                            colors.glow.opacity(0.10)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+        }
     }
 
     @ViewBuilder
@@ -154,6 +209,7 @@ struct SettingsView: View {
                         QuickPanelController.shared.show()
                     }
                     .font(.system(size: 12, weight: .medium)),
+                    trailingStyle: .button,
                     colors: colors
                 )
 
@@ -208,6 +264,7 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 12, weight: .medium))
                     .disabled(accessibilityTrusted),
+                    trailingStyle: .button,
                     colors: colors
                 )
             }
@@ -240,6 +297,7 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .frame(width: 190),
+                    trailingStyle: .picker,
                     colors: colors
                 )
             }
@@ -283,6 +341,7 @@ struct SettingsView: View {
                         Text("删除历史...")
                     }
                     .font(.system(size: 12, weight: .medium))
+                    .buttonStyle(SettingsGlassButtonStyle(colors: colors, isDestructive: true))
                     .disabled(items.isEmpty)
                 }
             }
@@ -305,7 +364,7 @@ struct SettingsView: View {
     private func sectionTitle(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(colors.primaryText)
+            .foregroundStyle(colors.secondaryText)
     }
 
     private func refreshState() {
@@ -393,12 +452,30 @@ private struct SettingsSidebarButton: View {
 
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(isSelected ? Color.white : colors.primaryText)
+            .foregroundStyle(isSelected ? colors.selectedText : colors.primaryText)
             .padding(.horizontal, 14)
-            .frame(height: 40)
+            .frame(height: 42)
             .background {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isSelected ? colors.accent : Color.clear)
+                    .fill(
+                        isSelected
+                            ? LinearGradient(
+                                colors: [
+                                    colors.accent.opacity(0.92),
+                                    colors.accent.opacity(0.66),
+                                    colors.edgeHighlight.opacity(0.26)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            : LinearGradient(colors: [.clear], startPoint: .top, endPoint: .bottom)
+                    )
+                    .overlay {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(colors.edgeHighlight.opacity(0.48), lineWidth: 0.8)
+                        }
+                    }
             }
         }
         .buttonStyle(.plain)
@@ -411,34 +488,44 @@ private struct SettingsCard<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0, content: content)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(colors.cardBackground)
-            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .paste3GlassSurface(
+                cornerRadius: Paste3Theme.cardRadius,
+                fill: colors.cardBackground,
+                isProminent: false
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(colors.border, lineWidth: 0.7)
+                RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous)
+                    .stroke(colors.edgeHighlight.opacity(0.26), lineWidth: 0.8)
             }
     }
+}
+
+private enum SettingsTrailingStyle {
+    case plain
+    case button
+    case picker
 }
 
 private struct SettingsInfoRow<Trailing: View>: View {
     let title: String
     let detail: String
     let trailing: Trailing
+    let trailingStyle: SettingsTrailingStyle
     let colors: SettingsColors
 
     init(
         title: String,
         detail: String,
         trailing: Trailing,
+        trailingStyle: SettingsTrailingStyle = .plain,
         colors: SettingsColors
     ) {
         self.title = title
         self.detail = detail
         self.trailing = trailing
+        self.trailingStyle = trailingStyle
         self.colors = colors
     }
 
@@ -458,9 +545,28 @@ private struct SettingsInfoRow<Trailing: View>: View {
 
             Spacer(minLength: 24)
 
-            trailing
+            styledTrailing
         }
         .frame(minHeight: 50)
+    }
+
+    @ViewBuilder
+    private var styledTrailing: some View {
+        switch trailingStyle {
+        case .plain:
+            trailing
+        case .button:
+            trailing
+                .buttonStyle(SettingsGlassButtonStyle(colors: colors))
+        case .picker:
+            trailing
+                .padding(.horizontal, 8)
+                .frame(height: 34)
+                .paste3GlassSurface(
+                    cornerRadius: Paste3Theme.controlRadius,
+                    fill: colors.controlBackground
+                )
+        }
     }
 }
 
@@ -469,41 +575,93 @@ private struct SettingsDivider: View {
 
     var body: some View {
         Rectangle()
-            .fill(colors.border)
+            .fill(
+                LinearGradient(
+                    colors: [colors.edgeHighlight.opacity(0.45), colors.border.opacity(0.52)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
             .frame(height: 0.7)
             .padding(.vertical, 8)
     }
 }
 
+private struct SettingsGlassButtonStyle: ButtonStyle {
+    let colors: SettingsColors
+    var isDestructive = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isDestructive ? colors.destructive : colors.primaryText)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .paste3GlassSurface(
+                cornerRadius: Paste3Theme.controlRadius,
+                fill: buttonFill(isPressed: configuration.isPressed),
+                isProminent: configuration.isPressed
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+
+    private func buttonFill(isPressed: Bool) -> Color {
+        if isDestructive {
+            return colors.destructive.opacity(isPressed ? 0.20 : 0.12)
+        }
+
+        return colors.controlBackground.opacity(isPressed ? 0.88 : 0.64)
+    }
+}
+
 private struct SettingsColors {
+    let palette: Paste3Theme.Palette
     let windowBackground: Color
     let sidebarBackground: Color
     let contentBackground: Color
     let cardBackground: Color
+    let controlBackground: Color
     let border: Color
+    let edgeHighlight: Color
+    let glow: Color
     let primaryText: Color
     let secondaryText: Color
+    let selectedText: Color
     let accent: Color
+    let destructive: Color
 
     init(colorScheme: ColorScheme) {
+        let palette = Paste3Theme.palette(for: colorScheme)
+        self.palette = palette
+
         if colorScheme == .dark {
-            windowBackground = Color(red: 0.08, green: 0.08, blue: 0.085)
-            sidebarBackground = Color(red: 0.10, green: 0.10, blue: 0.11)
-            contentBackground = Color(red: 0.075, green: 0.075, blue: 0.08)
-            cardBackground = Color.white.opacity(0.055)
-            border = Color.white.opacity(0.10)
-            primaryText = Color(red: 0.92, green: 0.92, blue: 0.94)
-            secondaryText = Color(red: 0.64, green: 0.65, blue: 0.69)
-            accent = Color(red: 0.13, green: 0.47, blue: 0.96)
+            windowBackground = palette.background
+            sidebarBackground = palette.shellFill.opacity(0.68)
+            contentBackground = palette.shellFill.opacity(0.42)
+            cardBackground = Color.white.opacity(0.070)
+            controlBackground = Color.white.opacity(0.075)
+            border = palette.border
+            edgeHighlight = palette.edgeHighlight
+            glow = palette.glassGlow
+            primaryText = palette.text
+            secondaryText = palette.secondaryText
+            selectedText = palette.primaryText
+            accent = palette.primary
+            destructive = palette.error
         } else {
-            windowBackground = Color(red: 0.965, green: 0.965, blue: 0.972)
-            sidebarBackground = Color(red: 0.957, green: 0.957, blue: 0.965)
-            contentBackground = Color(red: 0.988, green: 0.988, blue: 0.992)
-            cardBackground = Color.white.opacity(0.92)
-            border = Color.black.opacity(0.08)
-            primaryText = Color(red: 0.13, green: 0.13, blue: 0.15)
-            secondaryText = Color(red: 0.46, green: 0.46, blue: 0.50)
-            accent = Color(red: 0.0, green: 0.43, blue: 0.95)
+            windowBackground = palette.background
+            sidebarBackground = palette.shellFill.opacity(0.78)
+            contentBackground = Color.white.opacity(0.46)
+            cardBackground = Color.white.opacity(0.66)
+            controlBackground = Color.white.opacity(0.54)
+            border = palette.border
+            edgeHighlight = palette.edgeHighlight
+            glow = palette.glassGlow
+            primaryText = palette.text
+            secondaryText = palette.secondaryText
+            selectedText = .white
+            accent = palette.primary
+            destructive = palette.error
         }
     }
 }
