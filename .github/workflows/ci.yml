@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
 
 permissions:
@@ -31,3 +33,55 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:paste3Tests \
             -skip-testing:paste3UITests
+
+  release:
+    name: Build Release DMG
+    runs-on: macos-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build release app
+        run: |
+          xcodebuild build \
+            -project paste3.xcodeproj \
+            -scheme paste3 \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath /tmp/paste3-derived-release \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Create DMG
+        run: |
+          APP_PATH="/tmp/paste3-derived-release/Build/Products/Release/paste3.app"
+          DMG_PATH="${RUNNER_TEMP}/paste3-${GITHUB_REF_NAME}-macos.dmg"
+
+          test -d "$APP_PATH"
+          hdiutil create \
+            -volname "paste3 ${GITHUB_REF_NAME}" \
+            -srcfolder "$APP_PATH" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH"
+
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload DMG to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$DMG_PATH" \
+              --title "paste3 ${GITHUB_REF_NAME}" \
+              --notes "Automated unsigned macOS build for ${GITHUB_REF_NAME}."
+          fi
