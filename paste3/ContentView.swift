@@ -26,6 +26,12 @@ enum HistoryDisplayMode {
     }
 }
 
+private enum HistoryLayout {
+    static let cardSide: CGFloat = 220
+    static let cardVerticalInset: CGFloat = 8
+    static let cardContentHeight = cardSide + cardVerticalInset * 2
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.modelContext) private var modelContext
@@ -33,14 +39,22 @@ struct ContentView: View {
 
     private let displayMode: HistoryDisplayMode
     private let onDismiss: (() -> Void)?
+    private let onPasteRequest: (() -> Void)?
 
     @State private var selectedFilter: ClipboardFilter = .all
     @State private var searchText = ""
+    @State private var selectedItemID: UUID?
     @State private var copiedItemID: UUID?
+    @FocusState private var historyHasKeyboardFocus: Bool
 
-    init(displayMode: HistoryDisplayMode = .window, onDismiss: (() -> Void)? = nil) {
+    init(
+        displayMode: HistoryDisplayMode = .window,
+        onDismiss: (() -> Void)? = nil,
+        onPasteRequest: (() -> Void)? = nil
+    ) {
         self.displayMode = displayMode
         self.onDismiss = onDismiss
+        self.onPasteRequest = onPasteRequest
     }
 
     private var palette: Paste3Theme.Palette {
@@ -96,7 +110,7 @@ struct ContentView: View {
             cards: filteredItems.map { item in
                 ClipboardCardSnapshot(
                     item: item,
-                    characterCountText: ClipboardCardFormatters.characterCount(item.text.count),
+                    detailText: ClipboardCardFormatters.detailText(for: item),
                     createdAtText: ClipboardCardFormatters.relativeTimestamp(for: item.createdAt, relativeTo: referenceDate)
                 )
             }
@@ -105,6 +119,7 @@ struct ContentView: View {
 
     var body: some View {
         let snapshot = historySnapshot
+        let cardIDs = snapshot.cards.map(\.id)
 
         ZStack(alignment: .bottom) {
             outerBackground
@@ -119,6 +134,28 @@ struct ContentView: View {
             .padding(shellPadding)
         }
         .frame(minWidth: displayMode.minimumSize.width, minHeight: displayMode.minimumSize.height)
+        .focusable()
+        .focused($historyHasKeyboardFocus)
+        .focusEffectDisabled()
+        .onAppear {
+            resetSelection(to: cardIDs)
+            focusHistory()
+        }
+        .onChange(of: cardIDs) { _, newIDs in
+            normalizeSelection(in: newIDs)
+        }
+        .onKeyPress(.leftArrow) {
+            moveSelection(.previous, in: cardIDs)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            moveSelection(.next, in: cardIDs)
+            return .handled
+        }
+        .onKeyPress(.return) {
+            pasteSelectedItem(in: snapshot.cards)
+            return .handled
+        }
         .onExitCommand {
             onDismiss?()
         }
@@ -209,32 +246,49 @@ struct ContentView: View {
         if cards.isEmpty {
             emptyState(recentCount: recentCount)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .frame(minHeight: 226)
+                .frame(minHeight: HistoryLayout.cardContentHeight)
         } else {
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: Paste3Theme.gutter) {
-                    ForEach(cards) { card in
-                        ClipboardCard(
-                            snapshot: card,
-                            isCopied: copiedItemID == card.id,
-                            copyAction: {
-                                ClipboardWriter.copyBack(card.item.text)
-                                copiedItemID = card.id
-                                touch(card.item)
-                                onDismiss?()
-                            },
-                            deleteAction: {
-                                delete(card.item)
-                            }
-                        )
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: Paste3Theme.gutter) {
+                        ForEach(cards) { card in
+                            ClipboardCard(
+                                snapshot: card,
+                                isSelected: selectedItemID == card.id,
+                                isCopied: copiedItemID == card.id,
+                                selectAction: {
+                                    selectedItemID = card.id
+                                    focusHistory()
+                                },
+                                copyAction: {
+                                    copy(card, shouldPaste: false)
+                                },
+                                deleteAction: {
+                                    if selectedItemID == card.id {
+                                        selectedItemID = nil
+                                    }
+                                    delete(card.item)
+                                }
+                            )
+                            .id(card.id)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, HistoryLayout.cardVerticalInset)
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(minHeight: HistoryLayout.cardContentHeight)
+                .onChange(of: selectedItemID) { _, selectedID in
+                    guard let selectedID else {
+                        return
+                    }
+
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 8)
             }
-            .scrollIndicators(.hidden)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .frame(minHeight: 226)
         }
     }
 
@@ -284,7 +338,7 @@ struct ContentView: View {
             return "Switch to All Items to browse the rest of your clipboard history."
         }
 
-        return "Copy text, URLs, commands, or code snippets in another app. They will appear here."
+        return "Copy text, URLs, images, files, rich text, commands, or app data in another app. They will appear here."
     }
 
     private func footer(recentCount: Int) -> some View {
@@ -354,12 +408,85 @@ struct ContentView: View {
             assertionFailure("Failed to update clipboard item recency: \(error)")
         }
     }
+
+    private func focusHistory() {
+        Task { @MainActor in
+            historyHasKeyboardFocus = true
+        }
+    }
+
+    private func resetSelection(to cardIDs: [UUID]) {
+        selectedItemID = cardIDs.first
+    }
+
+    private func normalizeSelection(in cardIDs: [UUID]) {
+        guard !cardIDs.isEmpty else {
+            selectedItemID = nil
+            return
+        }
+
+        if selectedItemID.map({ cardIDs.contains($0) }) != true {
+            selectedItemID = cardIDs.first
+        }
+    }
+
+    private func moveSelection(_ direction: HistorySelectionDirection, in cardIDs: [UUID]) {
+        guard !cardIDs.isEmpty else {
+            selectedItemID = nil
+            return
+        }
+
+        let currentIndex = selectedItemID.flatMap { cardIDs.firstIndex(of: $0) } ?? 0
+        let nextIndex: Int
+        switch direction {
+        case .previous:
+            nextIndex = max(currentIndex - 1, 0)
+        case .next:
+            nextIndex = min(currentIndex + 1, cardIDs.count - 1)
+        }
+
+        selectedItemID = cardIDs[nextIndex]
+        copiedItemID = nil
+        focusHistory()
+    }
+
+    private func pasteSelectedItem(in cards: [ClipboardCardSnapshot]) {
+        let selectedCard = selectedItemID
+            .flatMap { selectedID in cards.first(where: { $0.id == selectedID }) } ?? cards.first
+
+        guard let selectedCard else {
+            return
+        }
+
+        copy(selectedCard, shouldPaste: true)
+    }
+
+    private func copy(_ card: ClipboardCardSnapshot, shouldPaste: Bool) {
+        ClipboardWriter.copyBack(card.item)
+        selectedItemID = card.id
+        copiedItemID = card.id
+        touch(card.item)
+
+        if shouldPaste, let onPasteRequest {
+            onPasteRequest()
+        } else {
+            onDismiss?()
+        }
+    }
+}
+
+private enum HistorySelectionDirection {
+    case previous
+    case next
 }
 
 private enum ClipboardFilter: CaseIterable, Identifiable {
     case all
     case text
     case links
+    case media
+    case files
+    case rich
     case commands
 
     var id: String { title }
@@ -372,6 +499,12 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             "Text"
         case .links:
             "Links"
+        case .media:
+            "Media"
+        case .files:
+            "Files"
+        case .rich:
+            "Rich"
         case .commands:
             "Commands"
         }
@@ -385,6 +518,12 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             "text.alignleft"
         case .links:
             "link"
+        case .media:
+            "photo"
+        case .files:
+            "doc"
+        case .rich:
+            "textformat"
         case .commands:
             "terminal"
         }
@@ -398,6 +537,12 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             "text.alignleft"
         case .links:
             "link"
+        case .media:
+            "photo.on.rectangle"
+        case .files:
+            "doc"
+        case .rich:
+            "textformat"
         case .commands:
             "terminal"
         }
@@ -411,6 +556,12 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             "No text clips"
         case .links:
             "No links"
+        case .media:
+            "No media clips"
+        case .files:
+            "No files"
+        case .rich:
+            "No rich clips"
         case .commands:
             "No commands"
         }
@@ -424,6 +575,12 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             item.kind == .text
         case .links:
             item.kind == .url
+        case .media:
+            item.kind == .image
+        case .files:
+            item.kind == .file
+        case .rich:
+            item.kind == .html || item.kind == .richText || item.kind == .data
         case .commands:
             item.kind == .command
         }
@@ -439,7 +596,7 @@ private struct ClipboardCardSnapshot: Identifiable {
     var id: UUID { item.id }
 
     let item: ClipboardItem
-    let characterCountText: String
+    let detailText: String
     let createdAtText: String
 }
 
@@ -451,12 +608,27 @@ private enum ClipboardCardFormatters {
         return formatter
     }()
 
-    static func characterCount(_ count: Int) -> String {
-        "\(count) 个字符"
+    static func detailText(for item: ClipboardItem) -> String {
+        switch item.kind {
+        case .image, .data:
+            return byteCount(item.byteSize)
+        case .file:
+            let count = item.text.split(separator: "\n", omittingEmptySubsequences: true).count
+            return "\(count) 个文件"
+        case .text, .url, .command, .richText, .html:
+            return "\(item.text.count) 个字符"
+        }
     }
 
     static func relativeTimestamp(for date: Date, relativeTo referenceDate: Date) -> String {
         relativeFormatter.localizedString(for: date, relativeTo: referenceDate)
+    }
+
+    private static func byteCount(_ byteSize: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useBytes, .useKB, .useMB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(byteSize))
     }
 }
 
@@ -464,7 +636,9 @@ private struct ClipboardCard: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let snapshot: ClipboardCardSnapshot
+    let isSelected: Bool
     let isCopied: Bool
+    let selectAction: () -> Void
     let copyAction: () -> Void
     let deleteAction: () -> Void
 
@@ -474,11 +648,58 @@ private struct ClipboardCard: View {
         Paste3Theme.palette(for: colorScheme)
     }
 
-    private let cardSide: CGFloat = 220
     private let iconSize: CGFloat = 42
+    private let footerHeight: CGFloat = 26
+    private let previewPadding: CGFloat = 14
 
     private var headerHeight: CGFloat {
-        cardSide / 5
+        HistoryLayout.cardSide / 5
+    }
+
+    private var imagePreviewSize: CGSize {
+        CGSize(
+            width: HistoryLayout.cardSide - previewPadding * 2,
+            height: HistoryLayout.cardSide - headerHeight - footerHeight - previewPadding * 2
+        )
+    }
+
+    private var cardFill: Color {
+        if isCopied {
+            return Paste3Theme.success.opacity(0.12)
+        }
+
+        if isSelected {
+            return palette.primary.opacity(0.14)
+        }
+
+        return isHovering ? palette.primary.opacity(0.10) : palette.cardFill
+    }
+
+    private var cardStroke: Color {
+        if isCopied {
+            return Paste3Theme.success.opacity(0.72)
+        }
+
+        if isSelected {
+            return palette.primary.opacity(0.82)
+        }
+
+        return isHovering ? palette.primary.opacity(0.58) : palette.border
+    }
+
+    private var tapGesture: some Gesture {
+        // Double-click keeps the previous copy-back behavior, while a single
+        // click only changes selection.
+        TapGesture(count: 2)
+            .exclusively(before: TapGesture(count: 1))
+            .onEnded { result in
+                switch result {
+                case .first:
+                    copyAction()
+                case .second:
+                    selectAction()
+                }
+            }
     }
 
     var body: some View {
@@ -490,29 +711,30 @@ private struct ClipboardCard: View {
 
             cardFooter
         }
-        .frame(width: cardSide, height: cardSide, alignment: .topLeading)
+        .frame(width: HistoryLayout.cardSide, height: HistoryLayout.cardSide, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous))
         .background {
             RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .fill(isCopied ? Paste3Theme.success.opacity(0.12) : isHovering ? palette.primary.opacity(0.10) : palette.cardFill)
+                .fill(cardFill)
         }
         .overlay {
             RoundedRectangle(cornerRadius: Paste3Theme.radius, style: .continuous)
-                .stroke(isCopied ? Paste3Theme.success.opacity(0.72) : isHovering ? palette.primary.opacity(0.58) : palette.border, lineWidth: 0.7)
+                .stroke(cardStroke, lineWidth: isSelected ? 1.5 : 0.7)
         }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.05), radius: 12, x: 0, y: 6)
         .scaleEffect(isHovering ? 1.01 : 1)
         .animation(.easeOut(duration: 0.16), value: isHovering)
+        .animation(.easeOut(duration: 0.16), value: isSelected)
         .onHover { hovering in
             isHovering = hovering
         }
-        .onTapGesture(perform: copyAction)
+        .gesture(tapGesture)
         .contextMenu {
             Button(role: .destructive, action: deleteAction) {
                 Label("Delete", systemImage: "trash")
             }
         }
-        .help("Click to copy. Right-click to delete.")
+        .help("Click to select. Double-click to copy. Right-click to delete.")
     }
 
     private var cardHeader: some View {
@@ -573,14 +795,14 @@ private struct ClipboardCard: View {
     private var cardFooter: some View {
         HStack {
             Spacer()
-            Text(snapshot.characterCountText)
+            Text(snapshot.detailText)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(palette.tertiaryText)
                 .lineLimit(1)
             Spacer()
         }
         .padding(.horizontal, 12)
-        .frame(height: 26)
+        .frame(height: footerHeight)
     }
 
     private var headerFill: Color {
@@ -629,6 +851,20 @@ private struct ClipboardCard: View {
 
     @ViewBuilder
     private var contentPreview: some View {
+        switch snapshot.item.kind {
+        case .image:
+            imagePreview
+        case .file:
+            filePreview
+        case .data:
+            dataPreview
+        case .text, .url, .command, .richText, .html:
+            textPreview
+        }
+    }
+
+    @ViewBuilder
+    private var textPreview: some View {
         if snapshot.item.text.count > 180 || snapshot.item.text.contains("\n") {
             ScrollView {
                 contentText
@@ -644,6 +880,89 @@ private struct ClipboardCard: View {
         }
     }
 
+    @ViewBuilder
+    private var imagePreview: some View {
+#if os(macOS)
+        if let image = snapshot.item.previewImage {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: imagePreviewSize.width, height: imagePreviewSize.height)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: Paste3Theme.controlRadius, style: .continuous))
+                .padding(previewPadding)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        } else {
+            dataPreview
+        }
+#else
+        dataPreview
+#endif
+    }
+
+    private var filePreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(snapshot.item.fileDisplayNames.prefix(4), id: \.self) { name in
+                HStack(spacing: 7) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(palette.primary)
+                    Text(name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(palette.text)
+                        .lineLimit(1)
+                }
+            }
+
+            if snapshot.item.fileDisplayNames.count > 4 {
+                Text("+ \(snapshot.item.fileDisplayNames.count - 4) more")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(palette.tertiaryText)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var dataPreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: snapshot.item.kind.sourceSymbolName)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(palette.primary)
+
+            Text(snapshot.item.payloadType ?? snapshot.item.kind.cardTitle)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .lineLimit(2)
+
+            Text(snapshot.item.text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(palette.secondaryText)
+                .lineLimit(2)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+}
+
+private extension ClipboardItem {
+    var fileDisplayNames: [String] {
+        text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { URL(fileURLWithPath: String($0)).lastPathComponent }
+    }
+
+#if os(macOS)
+    var previewImage: NSImage? {
+        guard let payloadData else {
+            return nil
+        }
+
+        return NSImage(data: payloadData)
+    }
+#endif
 }
 
 #if os(macOS)
@@ -801,6 +1120,16 @@ extension ClipboardKind {
             "链接"
         case .command:
             "命令"
+        case .image:
+            "图片"
+        case .file:
+            "文件"
+        case .richText:
+            "富文本"
+        case .html:
+            "HTML"
+        case .data:
+            "数据"
         }
     }
 
@@ -812,6 +1141,16 @@ extension ClipboardKind {
             "globe"
         case .command:
             "chevron.left.forwardslash.chevron.right"
+        case .image:
+            "photo"
+        case .file:
+            "doc"
+        case .richText:
+            "textformat"
+        case .html:
+            "curlybraces"
+        case .data:
+            "shippingbox"
         }
     }
 
@@ -823,6 +1162,14 @@ extension ClipboardKind {
             colorScheme == .dark ? Color(red: 0.07, green: 0.34, blue: 0.82) : Color(red: 0.12, green: 0.43, blue: 0.95)
         case .command:
             colorScheme == .dark ? Color(red: 0.40, green: 0.32, blue: 0.72) : Color(red: 0.48, green: 0.38, blue: 0.82)
+        case .image:
+            colorScheme == .dark ? Color(red: 0.65, green: 0.24, blue: 0.40) : Color(red: 0.93, green: 0.28, blue: 0.48)
+        case .file:
+            colorScheme == .dark ? Color(red: 0.35, green: 0.38, blue: 0.44) : Color(red: 0.40, green: 0.45, blue: 0.52)
+        case .richText, .html:
+            colorScheme == .dark ? Color(red: 0.48, green: 0.35, blue: 0.15) : Color(red: 0.86, green: 0.55, blue: 0.18)
+        case .data:
+            colorScheme == .dark ? Color(red: 0.28, green: 0.42, blue: 0.47) : Color(red: 0.20, green: 0.58, blue: 0.64)
         }
     }
 }

@@ -34,7 +34,9 @@ final class ClipboardStore {
             sourceAppName: candidate.source.appName,
             sourceBundleIdentifier: candidate.source.bundleIdentifier,
             contentHash: candidate.contentHash,
-            byteSize: candidate.byteSize
+            byteSize: candidate.byteSize,
+            payloadData: candidate.payloadData,
+            payloadType: candidate.payloadType
         )
         modelContext.insert(item)
         try modelContext.save()

@@ -9,6 +9,9 @@ import Foundation
 import SwiftData
 import Testing
 @testable import paste3
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor
 struct paste3Tests {
@@ -153,6 +156,74 @@ struct paste3Tests {
         #expect(second != nil)
         #expect(allItems.count == 2)
     }
+
+    @Test func storePersistsPayloadData() throws {
+        let context = try makeContext()
+        let store = ClipboardStore(modelContext: context)
+        let payload = Data([0x01, 0x02, 0x03])
+        let candidate = try #require(ClipboardClassifier.candidate(
+            kind: .data,
+            text: "public.test-data, 3 bytes",
+            payloadData: payload,
+            payloadType: "public.test-data",
+            source: ClipboardSource(appName: "Test", bundleIdentifier: "test.app")
+        ))
+
+        let item = try #require(try store.insert(candidate))
+
+        #expect(item.kind == .data)
+        #expect(item.payloadData == payload)
+        #expect(item.payloadType == "public.test-data")
+    }
+
+    @Test func classifierRejectsOversizedPayload() {
+        let payload = Data(repeating: 0, count: ClipboardClassifier.maxStoredPayloadBytes + 1)
+        let candidate = ClipboardClassifier.candidate(
+            kind: .data,
+            text: "oversized",
+            payloadData: payload,
+            payloadType: "public.test-data",
+            source: ClipboardSource(appName: "Test", bundleIdentifier: "test.app")
+        )
+
+        #expect(candidate == nil)
+    }
+
+#if os(macOS)
+    @Test func classifierCapturesHTMLPasteboardData() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("paste3Tests.html.\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setString("Hello", forType: .string)
+        pasteboard.setData(Data("<b>Hello</b>".utf8), forType: .html)
+
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: pasteboard,
+            source: ClipboardSource(appName: "Safari", bundleIdentifier: "com.apple.Safari")
+        ))
+
+        #expect(candidate.kind == .html)
+        #expect(candidate.text == "Hello")
+        #expect(candidate.payloadType == NSPasteboard.PasteboardType.html.rawValue)
+        #expect(candidate.payloadData == Data("<b>Hello</b>".utf8))
+    }
+
+    @Test func classifierCapturesGenericPasteboardData() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("paste3Tests.data.\(UUID().uuidString)"))
+        let payloadType = NSPasteboard.PasteboardType("com.example.custom")
+        let payload = Data([0x0A, 0x0B])
+        pasteboard.clearContents()
+        pasteboard.setData(payload, forType: payloadType)
+
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: pasteboard,
+            source: ClipboardSource(appName: "Custom", bundleIdentifier: "custom.app")
+        ))
+
+        #expect(candidate.kind == .data)
+        #expect(candidate.payloadType == payloadType.rawValue)
+        #expect(candidate.payloadData == payload)
+    }
+#endif
 
     @Test func storePrunesAboveLimit() throws {
         let context = try makeContext()

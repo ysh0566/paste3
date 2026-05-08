@@ -48,17 +48,13 @@ final class ClipboardMonitor {
         }
 
         lastChangeCount = pasteboard.changeCount
-        guard let text = pasteboard.string(forType: .string) else {
-            return
-        }
-
         let source = currentSource()
         // Copy-back happens while paste3 is frontmost. Skipping self-captures prevents a loop.
         if source.bundleIdentifier == Bundle.main.bundleIdentifier {
             return
         }
 
-        guard let candidate = ClipboardClassifier.candidate(from: text, source: source) else {
+        guard let candidate = ClipboardClassifier.candidate(from: pasteboard, source: source) else {
             return
         }
 

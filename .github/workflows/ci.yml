@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: macOS Unit Tests
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project paste3.xcodeproj \
+            -scheme paste3 \
+            -destination 'platform=macOS' \
+            -derivedDataPath /tmp/paste3-derived-unit \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:paste3Tests \
+            -skip-testing:paste3UITests

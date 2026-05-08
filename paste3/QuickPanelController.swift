@@ -16,13 +16,15 @@ final class QuickPanelController {
 
     private static let screenHeightRatio: CGFloat = 0.28
     private static let horizontalScreenInset: CGFloat = 16
-    private static let minimumPanelSize = CGSize(width: 760, height: 340)
+    private static let minimumPanelSize = CGSize(width: 760, height: 358)
     private static let maximumPanelHeight: CGFloat = 380
+    private static let pasteKeyVirtualCode: CGKeyCode = 0x09
 
     private var panel: NSPanel?
     private var localOutsideClickMonitor: Any?
     private var globalOutsideClickMonitor: Any?
     private var outsideClickMonitoringTask: Task<Void, Never>?
+    private var pasteTargetApplication: NSRunningApplication?
 
     private init() {}
 
@@ -35,8 +37,10 @@ final class QuickPanelController {
     }
 
     func show() {
+        rememberPasteTargetApplication()
         let panel = panel ?? makePanel()
         self.panel = panel
+        installRootView(in: panel)
         position(panel)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -72,13 +76,61 @@ final class QuickPanelController {
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
 
-        let rootView = ContentView(displayMode: .floatingPanel, onDismiss: { [weak self] in
-            self?.hide()
-        })
+        return panel
+    }
+
+    private func installRootView(in panel: NSPanel) {
+        // Rebuilding the SwiftUI root on each open resets transient selection/search
+        // state, so history consistently starts on the newest card.
+        let rootView = ContentView(
+            displayMode: .floatingPanel,
+            onDismiss: { [weak self] in
+                self?.hide()
+            },
+            onPasteRequest: { [weak self] in
+                self?.pasteToTargetApplication()
+            }
+        )
         .modelContainer(Paste3ModelContainer.shared)
 
         panel.contentViewController = NSHostingController(rootView: rootView)
-        return panel
+    }
+
+    private func rememberPasteTargetApplication() {
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        if frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
+            pasteTargetApplication = nil
+        } else {
+            pasteTargetApplication = frontmostApplication
+        }
+    }
+
+    private func pasteToTargetApplication() {
+        let targetApplication = pasteTargetApplication
+        pasteTargetApplication = nil
+        hide()
+
+        Task { @MainActor in
+            targetApplication?.activate()
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            Self.postPasteShortcut()
+        }
+    }
+
+    private static func postPasteShortcut() {
+        guard AccessibilityPermission.isTrusted,
+              let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: pasteKeyVirtualCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: pasteKeyVirtualCode, keyDown: false) else {
+            return
+        }
+
+        // Cmd+V is intentionally synthesized only after the panel closes and the
+        // original app is active, matching the user's keyboard-only paste flow.
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
     }
 
     private func position(_ panel: NSPanel) {

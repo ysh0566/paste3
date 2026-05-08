@@ -12,6 +12,11 @@ enum ClipboardKind: String, CaseIterable, Identifiable {
     case text
     case url
     case command
+    case image
+    case file
+    case richText
+    case html
+    case data
 
     var id: String { rawValue }
 
@@ -23,6 +28,16 @@ enum ClipboardKind: String, CaseIterable, Identifiable {
             "Link"
         case .command:
             "Command"
+        case .image:
+            "Image"
+        case .file:
+            "File"
+        case .richText:
+            "Rich Text"
+        case .html:
+            "HTML"
+        case .data:
+            "Data"
         }
     }
 }
@@ -38,6 +53,8 @@ final class ClipboardItem {
     var sourceBundleIdentifier: String?
     var contentHash: String
     var byteSize: Int
+    var payloadData: Data?
+    var payloadType: String?
 
     var kind: ClipboardKind {
         ClipboardKind(rawValue: kindRawValue) ?? .text
@@ -52,7 +69,9 @@ final class ClipboardItem {
         sourceAppName: String?,
         sourceBundleIdentifier: String?,
         contentHash: String,
-        byteSize: Int
+        byteSize: Int,
+        payloadData: Data? = nil,
+        payloadType: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -63,5 +82,7 @@ final class ClipboardItem {
         self.sourceBundleIdentifier = sourceBundleIdentifier
         self.contentHash = contentHash
         self.byteSize = byteSize
+        self.payloadData = payloadData
+        self.payloadType = payloadType
     }
 }

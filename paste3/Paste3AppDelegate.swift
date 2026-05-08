@@ -37,14 +37,20 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupStatusItem() {
-        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let statusItem = NSStatusBar.system.statusItem(withLength: 28)
         self.statusItem = statusItem
 
         guard let button = statusItem.button else {
             return
         }
 
-        button.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "paste3")
+        let statusImage = NSImage(named: NSImage.Name("StatusBarIcon")) ??
+            NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "paste3")
+        statusImage?.isTemplate = true
+        statusImage?.size = NSSize(width: 22, height: 22)
+        button.image = statusImage
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyUpOrDown
         button.target = self
         button.action = #selector(handleStatusItemClick(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -87,6 +93,16 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         settingsMenu.items.last?.target = self
+
+        let accessibilityItem = NSMenuItem(
+            title: AccessibilityPermission.isTrusted ? "Accessibility Permission Granted" : "Request Accessibility Permission",
+            action: #selector(requestAccessibilityPermission),
+            keyEquivalent: ""
+        )
+        accessibilityItem.target = self
+        accessibilityItem.isEnabled = !AccessibilityPermission.isTrusted
+        settingsMenu.addItem(accessibilityItem)
+
         settingsItem.submenu = settingsMenu
         menu.addItem(settingsItem)
 
@@ -104,6 +120,10 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             assertionFailure("Failed to clear clipboard history: \(error)")
         }
+    }
+
+    @objc private func requestAccessibilityPermission() {
+        AccessibilityPermission.requestPromptAndOpenSettingsIfNeeded()
     }
 
     @objc private func quit() {

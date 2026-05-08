@@ -3,3 +3,8 @@ DerivedData/
 IDETemplateMacros.plist
 *.xcuserstate
 xcuserdata/
+.DS_Store
+build/
+*.xcresult
+*.xcarchive
+*.ipa
