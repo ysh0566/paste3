@@ -464,6 +464,65 @@ struct paste3Tests {
         #expect(allItems.map(\.text) == ["old but kept"])
     }
 
+    @Test func storeItemsPageUsesOffsetLimitAndKindFilter() throws {
+        let now = Date()
+        let context = try makeContext()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "forever")
+        )
+        let source = ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+
+        for index in 0..<5 {
+            let candidate = try #require(ClipboardClassifier.candidate(from: "clip \(index)", source: source))
+            let item = try #require(try store.insert(candidate))
+            item.createdAt = now.addingTimeInterval(TimeInterval(-index))
+        }
+        let linkCandidate = try #require(ClipboardClassifier.candidate(from: "https://example.com", source: source))
+        let link = try #require(try store.insert(linkCandidate))
+        link.createdAt = now.addingTimeInterval(-10)
+        try context.save()
+
+        let page = try store.itemsPage(offset: 1, limit: 2)
+        #expect(page.map(\.text) == ["clip 1", "clip 2"])
+
+        let links = try store.itemsPage(offset: 0, limit: 10, matchingKinds: [.url])
+        #expect(links.map(\.text) == ["https://example.com"])
+    }
+
+    @Test func storeItemsPageSearchesBeyondFirstPageAndKeepsQuerySemantics() throws {
+        let now = Date()
+        let context = try makeContext()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "forever")
+        )
+        let xcode = ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+        let safari = ClipboardSource(appName: "Safari", bundleIdentifier: "com.apple.Safari")
+        let terminal = ClipboardSource(appName: "Terminal", bundleIdentifier: "com.apple.Terminal")
+
+        for index in 0..<130 {
+            let candidate = try #require(ClipboardClassifier.candidate(from: "ordinary clip \(index)", source: xcode))
+            let item = try #require(try store.insert(candidate))
+            item.createdAt = now.addingTimeInterval(TimeInterval(-index))
+        }
+
+        let falsePositiveCandidate = try #require(ClipboardClassifier.candidate(from: "terminal reference", source: safari))
+        let falsePositive = try #require(try store.insert(falsePositiveCandidate))
+        falsePositive.createdAt = now.addingTimeInterval(-131)
+
+        let matchingCandidate = try #require(ClipboardClassifier.candidate(from: "git status", source: terminal))
+        let matchingItem = try #require(try store.insert(matchingCandidate))
+        matchingItem.createdAt = now.addingTimeInterval(-132)
+        try context.save()
+
+        let textMatches = try store.itemsPage(offset: 0, limit: 10, matching: .parse("git"))
+        #expect(textMatches.map(\.text) == ["git status"])
+
+        let appMatches = try store.itemsPage(offset: 0, limit: 10, matching: .parse("app:terminal"))
+        #expect(appMatches.map(\.text) == ["git status"])
+    }
+
     private func makeContext() throws -> ModelContext {
         let schema = Schema([
             ClipboardItem.self,

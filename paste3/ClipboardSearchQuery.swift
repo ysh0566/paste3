@@ -59,6 +59,46 @@ struct ClipboardSearchQuery: Equatable {
         terms.isEmpty && filters.isEmpty
     }
 
+    var databaseSearchTerms: [String] {
+        terms + filters.compactMap { filter in
+            switch filter {
+            case .app(let value):
+                value.lowercased()
+            case .type, .from, .pin:
+                nil
+            }
+        }
+    }
+
+    var pinFilterValues: [String] {
+        filters.compactMap { filter in
+            guard case .pin(let value) = filter else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    var matchingKinds: [ClipboardKind]? {
+        var allowedKinds: Set<ClipboardKind>?
+        for filter in filters {
+            guard case .type(let value) = filter else {
+                continue
+            }
+
+            let matchingKinds = Set(ClipboardKind.allCases.filter { kind in
+                Self.typeAliases(for: kind).contains { $0.localizedCaseInsensitiveContains(value) }
+            })
+            allowedKinds = allowedKinds.map { $0.intersection(matchingKinds) } ?? matchingKinds
+        }
+
+        guard let allowedKinds else {
+            return nil
+        }
+
+        return ClipboardKind.allCases.filter { allowedKinds.contains($0) }
+    }
+
     func matches(
         _ item: ClipboardItem,
         pinboardNames: [String] = [],
@@ -93,7 +133,7 @@ struct ClipboardSearchQuery: Equatable {
                 .compactMap { $0 }
                 .contains { $0.localizedCaseInsensitiveContains(value) }
         case .type(let value):
-            return typeAliases(for: item.kind).contains { $0.localizedCaseInsensitiveContains(value) }
+            return Self.typeAliases(for: item.kind).contains { $0.localizedCaseInsensitiveContains(value) }
         case .from(let value):
             return matchesDateFilter(value, date: item.createdAt, calendar: calendar, now: now)
         case .pin(let value):
@@ -105,7 +145,7 @@ struct ClipboardSearchQuery: Equatable {
         }
     }
 
-    private func typeAliases(for kind: ClipboardKind) -> [String] {
+    private static func typeAliases(for kind: ClipboardKind) -> [String] {
         switch kind {
         case .text:
             ["text", "txt"]

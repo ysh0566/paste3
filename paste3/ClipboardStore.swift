@@ -182,6 +182,90 @@ final class ClipboardStore {
         return items.filter { ClipboardClassifier.matches($0, query: trimmedQuery) }
     }
 
+    func itemsPage(
+        offset: Int,
+        limit: Int,
+        matchingKinds kinds: [ClipboardKind]? = nil,
+        matching query: ClipboardSearchQuery? = nil,
+        matchingItemIDs itemIDs: Set<UUID>? = nil,
+        pinboardNamesByItemID: [UUID: [String]] = [:]
+    ) throws -> [ClipboardItem] {
+        try pruneExpiredItemsIfNeeded()
+
+        let query = query ?? ClipboardSearchQuery.parse("")
+        let sortBy = [SortDescriptor(\ClipboardItem.createdAt, order: .reverse)]
+        let queryKinds = query.matchingKinds
+        let effectiveKinds: [ClipboardKind]?
+        switch (kinds, queryKinds) {
+        case (.some(let kinds), .some(let queryKinds)):
+            let queryKindSet = Set(queryKinds)
+            effectiveKinds = kinds.filter { queryKindSet.contains($0) }
+        case (.some(let kinds), .none):
+            effectiveKinds = kinds
+        case (.none, .some(let queryKinds)):
+            effectiveKinds = queryKinds
+        case (.none, .none):
+            effectiveKinds = nil
+        }
+
+        if effectiveKinds?.isEmpty == true {
+            return []
+        }
+
+        let rawValues = effectiveKinds?.map(\.rawValue) ?? []
+        let hasKindFilter = effectiveKinds != nil
+        let searchTerms = query.databaseSearchTerms
+        let primarySearchTerm = searchTerms.first ?? ""
+        let hasPrimarySearchTerm = !primarySearchTerm.isEmpty
+        let scopedItemIDs = itemIDs.map(Array.init) ?? []
+        let hasItemIDScope = itemIDs != nil
+        var candidateOffset = 0
+        var skippedMatches = 0
+        var pageItems: [ClipboardItem] = []
+        let candidateLimit = max(limit * 4, 100)
+
+        while pageItems.count < limit {
+            var descriptor = FetchDescriptor<ClipboardItem>(
+                predicate: #Predicate { item in
+                    (!hasKindFilter || rawValues.contains(item.kindRawValue)) &&
+                        (!hasPrimarySearchTerm || item.searchText.contains(primarySearchTerm)) &&
+                        (!hasItemIDScope || scopedItemIDs.contains(item.id))
+                },
+                sortBy: sortBy
+            )
+            descriptor.fetchOffset = candidateOffset
+            descriptor.fetchLimit = candidateLimit
+
+            let candidates = try modelContext.fetch(descriptor)
+            guard !candidates.isEmpty else {
+                break
+            }
+
+            candidateOffset += candidates.count
+            for item in candidates {
+                guard query.matches(item, pinboardNames: pinboardNamesByItemID[item.id] ?? []) else {
+                    continue
+                }
+
+                if skippedMatches < offset {
+                    skippedMatches += 1
+                    continue
+                }
+
+                pageItems.append(item)
+                if pageItems.count == limit {
+                    break
+                }
+            }
+
+            if candidates.count < candidateLimit {
+                break
+            }
+        }
+
+        return pageItems
+    }
+
     func delete(_ item: ClipboardItem) throws {
         try deletePayloadIfNeeded(for: item)
         modelContext.delete(item)

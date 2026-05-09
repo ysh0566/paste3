@@ -32,10 +32,15 @@ private enum HistoryLayout {
     static let cardContentHeight = cardSide + cardVerticalInset * 2
 }
 
+private enum HistoryPagination {
+    static let pageSize = 100
+    static let preloadRemainingThreshold = 50
+    static let maxFillPagesPerInteraction = 12
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \ClipboardItem.createdAt, order: .reverse) private var items: [ClipboardItem]
     @Query(sort: [SortDescriptor(\Pinboard.sortOrder), SortDescriptor(\Pinboard.createdAt, order: .forward)]) private var pinboards: [Pinboard]
     @Query(sort: \PinnedClipboardItem.createdAt, order: .reverse) private var pinnedItems: [PinnedClipboardItem]
 
@@ -54,6 +59,10 @@ struct ContentView: View {
     @State private var pinboardFrames: [UUID: CGRect] = [:]
     @State private var copiedItemID: UUID?
     @State private var isCommandKeyPressed = false
+    @State private var items: [ClipboardItem] = []
+    @State private var itemFetchOffset = 0
+    @State private var canLoadMoreItems = true
+    @State private var isLoadingItems = false
 #if os(macOS)
     @State private var commandShortcutMonitor: Any?
 #endif
@@ -186,10 +195,9 @@ struct ContentView: View {
         .focused($historyHasKeyboardFocus)
         .focusEffectDisabled()
         .onAppear {
-            pruneExpiredHistory()
-            resetSelection(to: cardIDs)
+            reloadHistoryItems()
             focusHistory()
-            installCommandShortcutMonitor(cards: snapshot.cards)
+            installCommandShortcutMonitor(cards: historySnapshot.cards)
         }
         .onDisappear {
             uninstallCommandShortcutMonitor()
@@ -202,6 +210,15 @@ struct ContentView: View {
             if let selectedPinboardID, !pinboardIDs.contains(selectedPinboardID) {
                 self.selectedPinboardID = nil
             }
+        }
+        .onChange(of: selectedFilter) { _, _ in
+            reloadHistoryItems(fillVisibleResults: true)
+        }
+        .onChange(of: selectedPinboardID) { _, _ in
+            reloadHistoryItems(fillVisibleResults: true)
+        }
+        .onChange(of: searchText) { _, _ in
+            reloadHistoryItems(fillVisibleResults: true)
         }
         .onKeyPress(.leftArrow) {
             moveSelection(.previous, in: cardIDs)
@@ -577,6 +594,9 @@ struct ContentView: View {
                                 }
                             )
                             .id(card.id)
+                            .onAppear {
+                                loadMoreHistoryItemsIfNeeded(currentIndex: index, totalCount: cards.count)
+                            }
                         }
                     }
                     .padding(.horizontal, 24)
@@ -707,6 +727,7 @@ struct ContentView: View {
     private func delete(_ item: ClipboardItem) {
         do {
             try ClipboardStore(modelContext: modelContext).delete(item)
+            items.removeAll { $0.id == item.id }
         } catch {
             assertionFailure("Failed to delete clipboard item: \(error)")
         }
@@ -720,22 +741,136 @@ struct ContentView: View {
         }
     }
 
-    private func pruneExpiredHistory() {
-        do {
-            try ClipboardStore(modelContext: modelContext).pruneExpiredItemsIfNeeded()
-        } catch {
-            assertionFailure("Failed to prune expired clipboard history: \(error)")
+    private func reloadHistoryItems(fillVisibleResults: Bool = false) {
+        itemFetchOffset = 0
+        canLoadMoreItems = true
+        items = []
+        selectedItemID = nil
+        loadNextHistoryPage(fillVisibleResults: fillVisibleResults)
+    }
+
+    private func loadMoreHistoryItemsIfNeeded(currentIndex: Int, totalCount: Int) {
+        let remainingCount = totalCount - currentIndex - 1
+        guard remainingCount <= HistoryPagination.preloadRemainingThreshold else {
+            return
         }
+
+        loadNextHistoryPage()
+    }
+
+    private func loadNextHistoryPage(fillVisibleResults: Bool = false) {
+        guard !isLoadingItems, canLoadMoreItems else {
+            return
+        }
+
+        isLoadingItems = true
+        defer { isLoadingItems = false }
+
+        var fetchedPageCount = 0
+        repeat {
+            do {
+                let page = try ClipboardStore(modelContext: modelContext).itemsPage(
+                    offset: itemFetchOffset,
+                    limit: HistoryPagination.pageSize,
+                    matchingKinds: selectedFilter.matchingKinds,
+                    matching: parsedSearchQuery(),
+                    matchingItemIDs: scopedItemIDs(),
+                    pinboardNamesByItemID: pinboardNamesByItemID()
+                )
+                itemFetchOffset += page.count
+                canLoadMoreItems = page.count == HistoryPagination.pageSize
+                appendUniqueHistoryItems(page)
+                fetchedPageCount += 1
+            } catch {
+                canLoadMoreItems = false
+                assertionFailure("Failed to load paged clipboard history: \(error)")
+            }
+        } while fillVisibleResults &&
+            canLoadMoreItems &&
+            currentVisibleItemCount() < HistoryPagination.pageSize &&
+            fetchedPageCount < HistoryPagination.maxFillPagesPerInteraction
+
+        normalizeSelection(in: historySnapshot.cards.map(\.id))
+    }
+
+    private func appendUniqueHistoryItems(_ page: [ClipboardItem]) {
+        let existingIDs = Set(items.map(\.id))
+        items.append(contentsOf: page.filter { !existingIDs.contains($0.id) })
+    }
+
+    private func currentVisibleItemCount() -> Int {
+        let parsedQuery = parsedSearchQuery()
+        let pinsByItemID = Dictionary(grouping: pinnedItems, by: \.clipboardItemID)
+        let pinboardNamesByID = Dictionary(uniqueKeysWithValues: pinboards.map { ($0.id, $0.name) })
+        let sourceItems: [ClipboardItem]
+
+        if let selectedPinboardID {
+            let boardItemIDs = Set(pinnedItems.filter { $0.pinboardID == selectedPinboardID }.map(\.clipboardItemID))
+            sourceItems = items.filter { boardItemIDs.contains($0.id) }
+        } else {
+            sourceItems = items
+        }
+
+        return sourceItems.filter { item in
+            let pinnedPinboardNames = (pinsByItemID[item.id] ?? [])
+                .compactMap { pinboardNamesByID[$0.pinboardID] }
+            return selectedFilter.matches(item) &&
+                (parsedQuery.isEmpty || parsedQuery.matches(item, pinboardNames: pinnedPinboardNames))
+        }.count
+    }
+
+    private func parsedSearchQuery() -> ClipboardSearchQuery {
+        ClipboardSearchQuery.parse(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func scopedItemIDs() -> Set<UUID>? {
+        let query = parsedSearchQuery()
+        var scopes: [Set<UUID>] = []
+
+        if let selectedPinboardID {
+            scopes.append(Set(pinnedItems.filter { $0.pinboardID == selectedPinboardID }.map(\.clipboardItemID)))
+        }
+
+        for pinFilterValue in query.pinFilterValues {
+            let lowered = pinFilterValue.lowercased()
+            if ["true", "yes", "any"].contains(lowered) {
+                scopes.append(Set(pinnedItems.map(\.clipboardItemID)))
+                continue
+            }
+
+            let matchingPinboardIDs = Set(pinboards
+                .filter { $0.name.localizedCaseInsensitiveContains(pinFilterValue) }
+                .map(\.id))
+            scopes.append(Set(pinnedItems
+                .filter { matchingPinboardIDs.contains($0.pinboardID) }
+                .map(\.clipboardItemID)))
+        }
+
+        guard let firstScope = scopes.first else {
+            return nil
+        }
+
+        return scopes.dropFirst().reduce(firstScope) { partialResult, scope in
+            partialResult.intersection(scope)
+        }
+    }
+
+    private func pinboardNamesByItemID() -> [UUID: [String]] {
+        let pinboardNamesByID = Dictionary(uniqueKeysWithValues: pinboards.map { ($0.id, $0.name) })
+        var namesByItemID: [UUID: [String]] = [:]
+        for pin in pinnedItems {
+            guard let pinboardName = pinboardNamesByID[pin.pinboardID] else {
+                continue
+            }
+            namesByItemID[pin.clipboardItemID, default: []].append(pinboardName)
+        }
+        return namesByItemID
     }
 
     private func focusHistory() {
         Task { @MainActor in
             historyHasKeyboardFocus = true
         }
-    }
-
-    private func resetSelection(to cardIDs: [UUID]) {
-        selectedItemID = cardIDs.first
     }
 
     private func normalizeSelection(in cardIDs: [UUID]) {
@@ -965,6 +1100,25 @@ private enum ClipboardFilter: CaseIterable, Identifiable {
             "No rich clips"
         case .commands:
             "No commands"
+        }
+    }
+
+    var matchingKinds: [ClipboardKind]? {
+        switch self {
+        case .all:
+            nil
+        case .text:
+            [.text]
+        case .links:
+            [.url]
+        case .media:
+            [.image]
+        case .files:
+            [.file]
+        case .rich:
+            [.html, .richText, .data]
+        case .commands:
+            [.command]
         }
     }
 
