@@ -1,6 +1,6 @@
 //
 //  ClipboardMonitor.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -49,8 +49,10 @@ final class ClipboardMonitor {
 
         lastChangeCount = pasteboard.changeCount
         let source = currentSource()
-        // Copy-back happens while paste3 is frontmost. Skipping self-captures prevents a loop.
-        if source.bundleIdentifier == Bundle.main.bundleIdentifier {
+        if !ClipboardCapturePreference.shared.shouldCapture(
+            source: source,
+            appBundleIdentifier: Bundle.main.bundleIdentifier
+        ) {
             return
         }
 

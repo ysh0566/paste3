@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -107,8 +107,10 @@ struct ContentView: View {
     private var historySnapshot: HistorySnapshot {
         let recentItems = items
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedQuery = ClipboardSearchQuery.parse(trimmedQuery)
         let referenceDate = Date()
         let pinsByItemID = Dictionary(grouping: pinnedItems, by: \.clipboardItemID)
+        let pinboardNamesByID = Dictionary(uniqueKeysWithValues: pinboards.map { ($0.id, $0.name) })
         let sourceItems: [ClipboardItem]
 
         if let selectedPinboardID {
@@ -129,8 +131,10 @@ struct ContentView: View {
         }
 
         let filteredItems = sourceItems.filter { item in
-            selectedFilter.matches(item) &&
-                (trimmedQuery.isEmpty || ClipboardClassifier.matches(item, query: trimmedQuery))
+            let pinnedPinboardNames = (pinsByItemID[item.id] ?? [])
+                .compactMap { pinboardNamesByID[$0.pinboardID] }
+            return selectedFilter.matches(item) &&
+                (parsedQuery.isEmpty || parsedQuery.matches(item, pinboardNames: pinnedPinboardNames))
         }
 
         // Build the card display strings once per body pass so rendering does not
@@ -140,11 +144,14 @@ struct ContentView: View {
             isPinboardSelected: selectedPinboardID != nil,
             selectedPinboardName: selectedPinboard?.name,
             cards: filteredItems.map { item in
-                ClipboardCardSnapshot(
+                let itemPinboardNames = (pinsByItemID[item.id] ?? [])
+                    .compactMap { pinboardNamesByID[$0.pinboardID] }
+                return ClipboardCardSnapshot(
                     item: item,
                     detailText: ClipboardCardFormatters.detailText(for: item),
                     createdAtText: ClipboardCardFormatters.relativeTimestamp(for: item.createdAt, relativeTo: referenceDate),
-                    pinnedPinboardIDs: Set((pinsByItemID[item.id] ?? []).map(\.pinboardID))
+                    pinnedPinboardIDs: Set((pinsByItemID[item.id] ?? []).map(\.pinboardID)),
+                    pinnedPinboardNames: itemPinboardNames
                 )
             }
         )
@@ -995,6 +1002,7 @@ private struct ClipboardCardSnapshot: Identifiable {
     let detailText: String
     let createdAtText: String
     let pinnedPinboardIDs: Set<UUID>
+    let pinnedPinboardNames: [String]
 }
 
 @MainActor

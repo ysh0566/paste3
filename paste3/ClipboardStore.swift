@@ -1,6 +1,6 @@
 //
 //  ClipboardStore.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -110,15 +110,18 @@ final class ClipboardStore {
 
     private let modelContext: ModelContext
     private let retentionPeriod: ClipboardRetentionPeriod
+    private let payloadStore: ClipboardPayloadStore
     private let referenceDateProvider: () -> Date
 
     init(
         modelContext: ModelContext,
         retentionPeriod: ClipboardRetentionPeriod? = nil,
+        payloadStore: ClipboardPayloadStore? = nil,
         referenceDateProvider: @escaping () -> Date = Date.init
     ) {
         self.modelContext = modelContext
         self.retentionPeriod = retentionPeriod ?? ClipboardRetentionPreference.shared.period
+        self.payloadStore = payloadStore ?? ClipboardPayloadStore.shared
         self.referenceDateProvider = referenceDateProvider
     }
 
@@ -129,6 +132,15 @@ final class ClipboardStore {
             return nil
         }
 
+        var payloadData = candidate.payloadData
+        let payloadFileName: String?
+        if let data = candidate.payloadData {
+            payloadFileName = try payloadStore.write(data, payloadType: candidate.payloadType)
+            payloadData = nil
+        } else {
+            payloadFileName = nil
+        }
+
         let item = ClipboardItem(
             kind: candidate.kind,
             text: candidate.text,
@@ -137,13 +149,21 @@ final class ClipboardStore {
             sourceBundleIdentifier: candidate.source.bundleIdentifier,
             contentHash: candidate.contentHash,
             byteSize: candidate.byteSize,
-            payloadData: candidate.payloadData,
-            payloadType: candidate.payloadType
+            payloadData: payloadData,
+            payloadType: candidate.payloadType,
+            payloadFileName: payloadFileName
         )
-        modelContext.insert(item)
-        try modelContext.save()
-        try pruneExpiredItemsIfNeeded()
-        return item
+        do {
+            modelContext.insert(item)
+            try modelContext.save()
+            try pruneExpiredItemsIfNeeded()
+            return item
+        } catch {
+            if let payloadFileName {
+                try? payloadStore.delete(fileName: payloadFileName)
+            }
+            throw error
+        }
     }
 
     func items(matching query: String = "") throws -> [ClipboardItem] {
@@ -163,6 +183,7 @@ final class ClipboardStore {
     }
 
     func delete(_ item: ClipboardItem) throws {
+        try deletePayloadIfNeeded(for: item)
         modelContext.delete(item)
         try modelContext.save()
     }
@@ -173,6 +194,10 @@ final class ClipboardStore {
     }
 
     func deleteAll() throws {
+        let items = try modelContext.fetch(FetchDescriptor<ClipboardItem>())
+        for item in items {
+            try deletePayloadIfNeeded(for: item)
+        }
         try modelContext.delete(model: ClipboardItem.self)
         try modelContext.save()
     }
@@ -193,9 +218,22 @@ final class ClipboardStore {
         }
 
         for item in expiredItems {
+            try deletePayloadIfNeeded(for: item)
             modelContext.delete(item)
         }
         try modelContext.save()
+    }
+
+    func payloadData(for item: ClipboardItem) throws -> Data? {
+        if let payloadData = item.payloadData {
+            return payloadData
+        }
+
+        guard let payloadFileName = item.payloadFileName else {
+            return nil
+        }
+
+        return try payloadStore.read(fileName: payloadFileName)
     }
 
     private func item(matchingHash hash: String) throws -> ClipboardItem? {
@@ -206,5 +244,13 @@ final class ClipboardStore {
         )
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
+    }
+
+    private func deletePayloadIfNeeded(for item: ClipboardItem) throws {
+        guard let payloadFileName = item.payloadFileName else {
+            return
+        }
+
+        try payloadStore.delete(fileName: payloadFileName)
     }
 }

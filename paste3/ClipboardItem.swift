@@ -1,6 +1,6 @@
 //
 //  ClipboardItem.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -55,6 +55,7 @@ final class ClipboardItem {
     var byteSize: Int
     var payloadData: Data?
     var payloadType: String?
+    var payloadFileName: String?
 
     var kind: ClipboardKind {
         ClipboardKind(rawValue: kindRawValue) ?? .text
@@ -71,7 +72,8 @@ final class ClipboardItem {
         contentHash: String,
         byteSize: Int,
         payloadData: Data? = nil,
-        payloadType: String? = nil
+        payloadType: String? = nil,
+        payloadFileName: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -84,5 +86,6 @@ final class ClipboardItem {
         self.byteSize = byteSize
         self.payloadData = payloadData
         self.payloadType = payloadType
+        self.payloadFileName = payloadFileName
     }
 }

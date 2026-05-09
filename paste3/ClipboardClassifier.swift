@@ -1,6 +1,6 @@
 //
 //  ClipboardClassifier.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -121,12 +121,7 @@ enum ClipboardClassifier {
     }
 
     static func matches(_ item: ClipboardItem, query: String) -> Bool {
-        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalizedQuery.isEmpty else {
-            return true
-        }
-
-        return item.searchText.localizedCaseInsensitiveContains(normalizedQuery)
+        ClipboardSearchQuery.parse(query).matches(item)
     }
 
     private static func isURL(_ text: String) -> Bool {

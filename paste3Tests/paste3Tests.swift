@@ -162,7 +162,8 @@ struct paste3Tests {
 
     @Test func storePersistsPayloadData() throws {
         let context = try makeContext()
-        let store = ClipboardStore(modelContext: context)
+        let payloadStore = ClipboardPayloadStore.temporaryForTests()
+        let store = ClipboardStore(modelContext: context, payloadStore: payloadStore)
         let payload = Data([0x01, 0x02, 0x03])
         let candidate = try #require(ClipboardClassifier.candidate(
             kind: .data,
@@ -175,8 +176,29 @@ struct paste3Tests {
         let item = try #require(try store.insert(candidate))
 
         #expect(item.kind == .data)
-        #expect(item.payloadData == payload)
+        #expect(item.payloadData == nil)
+        #expect(item.payloadFileName != nil)
         #expect(item.payloadType == "public.test-data")
+        #expect(try store.payloadData(for: item) == payload)
+    }
+
+    @Test func storeDeletesExternalPayloadWithItem() throws {
+        let context = try makeContext()
+        let payloadStore = ClipboardPayloadStore.temporaryForTests()
+        let store = ClipboardStore(modelContext: context, payloadStore: payloadStore)
+        let candidate = try #require(ClipboardClassifier.candidate(
+            kind: .data,
+            text: "public.test-data, 2 bytes",
+            payloadData: Data([0x0A, 0x0B]),
+            payloadType: "public.test-data",
+            source: ClipboardSource(appName: "Test", bundleIdentifier: "test.app")
+        ))
+        let item = try #require(try store.insert(candidate))
+        let payloadFileName = try #require(item.payloadFileName)
+
+        try store.delete(item)
+
+        #expect(try payloadStore.read(fileName: payloadFileName) == nil)
     }
 
     @Test func pinboardStoreCreatesRenamesAndColorsBoard() throws {
@@ -267,7 +289,58 @@ struct paste3Tests {
         #expect(candidate == nil)
     }
 
+    @Test func searchQueryMatchesAppTypeAndRelativeDate() throws {
+        let item = ClipboardItem(
+            createdAt: Date(),
+            kind: .command,
+            text: "kubectl get pods",
+            searchText: "kubectl get pods command terminal com.apple.terminal",
+            sourceAppName: "Terminal",
+            sourceBundleIdentifier: "com.apple.Terminal",
+            contentHash: "hash",
+            byteSize: 16
+        )
+
+        #expect(ClipboardSearchQuery.parse("app:terminal type:cmd from:today pods").matches(item))
+        #expect(!ClipboardSearchQuery.parse("app:safari type:link").matches(item))
+    }
+
+    @Test func searchQueryMatchesPinboardNames() {
+        let item = ClipboardItem(
+            kind: .url,
+            text: "https://github.com/ysh0566/paste3",
+            searchText: "https://github.com/ysh0566/paste3 url safari",
+            sourceAppName: "Safari",
+            sourceBundleIdentifier: "com.apple.Safari",
+            contentHash: "hash",
+            byteSize: 32
+        )
+
+        #expect(ClipboardSearchQuery.parse("pin:PR").matches(item, pinboardNames: ["PR Links"]))
+        #expect(!ClipboardSearchQuery.parse("pin:Commands").matches(item, pinboardNames: ["PR Links"]))
+    }
+
 #if os(macOS)
+    @Test func capturePreferenceSkipsPausedAndExcludedApps() throws {
+        let suiteName = "paste3Tests.capture.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preference = ClipboardCapturePreference(defaults: defaults)
+        let source = ClipboardSource(appName: "Terminal", bundleIdentifier: "com.apple.Terminal")
+
+        #expect(preference.shouldCapture(source: source, appBundleIdentifier: "top.ysh0566.paste3"))
+
+        preference.setPaused(true)
+        #expect(!preference.shouldCapture(source: source, appBundleIdentifier: "top.ysh0566.paste3"))
+
+        preference.setPaused(false)
+        preference.exclude(source: source)
+        #expect(!preference.shouldCapture(source: source, appBundleIdentifier: "top.ysh0566.paste3"))
+    }
+
     @Test func classifierCapturesHTMLPasteboardData() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("paste3Tests.html.\(UUID().uuidString)"))
         pasteboard.clearContents()

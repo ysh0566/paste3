@@ -1,6 +1,6 @@
 //
 //  Paste3AppDelegate.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/5/7.
 //
@@ -19,7 +19,7 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Keep paste3 as a menu bar utility even when launched from Xcode or a stale bundle.
+        // Keep Paste3 as a menu bar utility even when launched from Xcode or a stale bundle.
         NSApp.setActivationPolicy(.accessory)
         startClipboardMonitorIfNeeded()
         startQuickPanelHotKey()
@@ -51,7 +51,7 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let statusImage = NSImage(named: NSImage.Name("StatusBarIcon")) ??
-            NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "paste3")
+            NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Paste3")
         statusImage?.isTemplate = true
         statusImage?.size = NSSize(width: 22, height: 22)
         button.image = statusImage
@@ -102,6 +102,7 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
     private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         let currentShortcut = shortcutPreference.shortcut
+        let capturePreference = ClipboardCapturePreference.shared
 
         let quickPanelItem = NSMenuItem(
             title: "Quick Panel",
@@ -117,7 +118,20 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit paste3", action: #selector(quit), keyEquivalent: "q")
+        let pauseTitle = capturePreference.isPaused ? "Resume Capture" : "Pause Capture"
+        let pauseItem = NSMenuItem(title: pauseTitle, action: #selector(toggleCapturePaused), keyEquivalent: "")
+        pauseItem.target = self
+        menu.addItem(pauseItem)
+
+        let frontmostSource = currentFrontmostSource()
+        let ignoreTitle = frontmostSource.appName.map { "Ignore \($0)" } ?? "Ignore Current App"
+        let ignoreItem = NSMenuItem(title: ignoreTitle, action: #selector(ignoreFrontmostApplication), keyEquivalent: "")
+        ignoreItem.target = self
+        ignoreItem.isEnabled = frontmostSource.bundleIdentifier != nil
+        menu.addItem(ignoreItem)
+
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "Quit Paste3", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -132,8 +146,24 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.show()
     }
 
+    @objc private func toggleCapturePaused() {
+        ClipboardCapturePreference.shared.togglePaused()
+    }
+
+    @objc private func ignoreFrontmostApplication() {
+        ClipboardCapturePreference.shared.exclude(source: currentFrontmostSource())
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func currentFrontmostSource() -> ClipboardSource {
+        let app = NSWorkspace.shared.frontmostApplication
+        return ClipboardSource(
+            appName: app?.localizedName,
+            bundleIdentifier: app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app?.bundleIdentifier
+        )
     }
 }
 #endif

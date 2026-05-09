@@ -1,6 +1,6 @@
 //
 //  ClipboardWriter.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/4/29.
 //
@@ -40,7 +40,7 @@ enum ClipboardWriter {
 
         switch item.kind {
         case .image:
-            if let payloadType = item.payloadType, let payloadData = item.payloadData {
+            if let payloadType = item.payloadType, let payloadData = payloadData(for: item) {
                 pasteboard.setData(payloadData, forType: NSPasteboard.PasteboardType(payloadType))
             } else {
                 pasteboard.setString(item.text, forType: .string)
@@ -51,7 +51,7 @@ enum ClipboardWriter {
                 .map { URL(fileURLWithPath: String($0)) }
             pasteboard.writeObjects(urls as [NSURL])
         case .richText, .html, .data:
-            if let payloadType = item.payloadType, let payloadData = item.payloadData {
+            if let payloadType = item.payloadType, let payloadData = payloadData(for: item) {
                 pasteboard.setData(payloadData, forType: NSPasteboard.PasteboardType(payloadType))
             }
             if item.kind != .data {
@@ -60,6 +60,18 @@ enum ClipboardWriter {
         case .text, .url, .command:
             pasteboard.setString(item.text, forType: .string)
         }
+    }
+
+    private static func payloadData(for item: ClipboardItem) -> Data? {
+        if let payloadData = item.payloadData {
+            return payloadData
+        }
+
+        guard let payloadFileName = item.payloadFileName else {
+            return nil
+        }
+
+        return try? ClipboardPayloadStore.shared.read(fileName: payloadFileName)
     }
 #endif
 }

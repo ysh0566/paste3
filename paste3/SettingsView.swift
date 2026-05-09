@@ -1,6 +1,6 @@
 //
 //  SettingsView.swift
-//  paste3
+//  Paste3
 //
 //  Created by Codex on 2026/5/8.
 //
@@ -18,6 +18,9 @@ struct SettingsView: View {
     @State private var selectedShortcutID = QuickPanelShortcutPreference.shared.shortcut.id
     @State private var selectedRetentionPeriodID = ClipboardRetentionPreference.shared.period.id
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
+    @State private var capturePaused = ClipboardCapturePreference.shared.isPaused
+    @State private var excludedApps = ClipboardCapturePreference.shared.excludedApps
+    @State private var newExcludedBundleIdentifier = ""
     @State private var isConfirmingHistoryClear = false
 
     private var colors: SettingsColors {
@@ -54,7 +57,7 @@ struct SettingsView: View {
             Button("清空历史", role: .destructive, action: clearHistory)
             Button("取消", role: .cancel) {}
         } message: {
-            Text("这会删除 paste3 在本机保存的所有剪贴板项目。")
+            Text("这会删除 Paste3 在本机保存的所有剪贴板项目。")
         }
     }
 
@@ -120,7 +123,7 @@ struct SettingsView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("paste3")
+                Text("Paste3")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(colors.primaryText)
 
@@ -197,7 +200,7 @@ struct SettingsView: View {
             SettingsCard(colors: colors) {
                 SettingsInfoRow(
                     title: "菜单栏运行",
-                    detail: "paste3 作为菜单栏工具运行，左键打开 Quick Panel，右键打开菜单。",
+                    detail: "Paste3 作为菜单栏工具运行，左键打开 Quick Panel，右键打开菜单。",
                     trailing: Text("已开启")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(colors.secondaryText),
@@ -261,7 +264,7 @@ struct SettingsView: View {
                 SettingsInfoRow(
                     title: "辅助功能权限",
                     detail: accessibilityTrusted
-                        ? "已允许 paste3 在选择历史项目后向当前应用发送 Cmd+V。"
+                        ? "已允许 Paste3 在选择历史项目后向当前应用发送 Cmd+V。"
                         : "自动粘贴需要该权限；未授权时仍可复制回系统剪贴板。",
                     trailing: Button(accessibilityTrusted ? "已授权" : "授权") {
                         requestAccessibilityPermission()
@@ -284,6 +287,54 @@ struct SettingsView: View {
                         .foregroundStyle(colors.accent),
                     colors: colors
                 )
+
+                SettingsDivider(colors: colors)
+
+                SettingsInfoRow(
+                    title: "剪贴板捕获",
+                    detail: capturePaused ? "已暂停记录新的剪贴板内容，历史仍可搜索和粘贴。" : "正在记录未被排除 App 写入的剪贴板内容。",
+                    trailing: Toggle("", isOn: captureEnabledBinding)
+                        .labelsHidden()
+                        .toggleStyle(.switch),
+                    colors: colors
+                )
+            }
+
+            sectionTitle("排除 App")
+
+            SettingsCard(colors: colors) {
+                HStack(spacing: 10) {
+                    TextField("Bundle ID，例如 com.apple.keychainaccess", text: $newExcludedBundleIdentifier)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 10)
+                        .frame(height: 34)
+                        .paste3GlassSurface(
+                            cornerRadius: Paste3Theme.controlRadius,
+                            fill: colors.controlBackground
+                        )
+
+                    Button("添加") {
+                        addExcludedBundleIdentifier()
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .buttonStyle(SettingsGlassButtonStyle(colors: colors))
+                    .disabled(newExcludedBundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if excludedApps.isEmpty {
+                    SettingsDivider(colors: colors)
+
+                    Text("没有排除任何 App。")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(colors.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(excludedApps) { app in
+                        SettingsDivider(colors: colors)
+                        excludedAppRow(app)
+                    }
+                }
             }
         }
     }
@@ -293,7 +344,7 @@ struct SettingsView: View {
             SettingsCard(colors: colors) {
                 SettingsInfoRow(
                     title: "Quick Panel 快捷键",
-                    detail: "选择全局快捷键，用于在任意应用上方呼出 paste3。",
+                    detail: "选择全局快捷键，用于在任意应用上方呼出 Paste3。",
                     trailing: Picker("快捷键", selection: $selectedShortcutID) {
                         ForEach(QuickPanelShortcut.all) { shortcut in
                             Text(shortcut.menuTitle).tag(shortcut.id)
@@ -389,6 +440,7 @@ struct SettingsView: View {
         selectedShortcutID = QuickPanelShortcutPreference.shared.shortcut.id
         selectedRetentionPeriodID = ClipboardRetentionPreference.shared.period.id
         accessibilityTrusted = AccessibilityPermission.isTrusted
+        refreshCaptureState()
         pruneHistory(using: ClipboardRetentionPreference.shared.period)
     }
 
@@ -411,6 +463,15 @@ struct SettingsView: View {
 
     private var selectedRetentionPeriod: ClipboardRetentionPeriod {
         ClipboardRetentionPeriod.find(id: selectedRetentionPeriodID)
+    }
+
+    private var captureEnabledBinding: Binding<Bool> {
+        Binding {
+            !capturePaused
+        } set: { enabled in
+            ClipboardCapturePreference.shared.setPaused(!enabled)
+            refreshCaptureState()
+        }
     }
 
     private var retentionPeriodIndexBinding: Binding<Double> {
@@ -436,6 +497,52 @@ struct SettingsView: View {
         } catch {
             assertionFailure("Failed to prune expired clipboard history: \(error)")
         }
+    }
+
+    private func addExcludedBundleIdentifier() {
+        ClipboardCapturePreference.shared.addExcludedApp(bundleIdentifier: newExcludedBundleIdentifier)
+        newExcludedBundleIdentifier = ""
+        refreshCaptureState()
+    }
+
+    private func removeExcludedBundleIdentifier(_ bundleIdentifier: String) {
+        ClipboardCapturePreference.shared.removeExcludedApp(bundleIdentifier: bundleIdentifier)
+        refreshCaptureState()
+    }
+
+    private func refreshCaptureState() {
+        capturePaused = ClipboardCapturePreference.shared.isPaused
+        excludedApps = ClipboardCapturePreference.shared.excludedApps
+    }
+
+    private func excludedAppRow(_ app: ClipboardCaptureExcludedApp) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "nosign")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(colors.accent)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(app.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(colors.primaryText)
+
+                Text(app.bundleIdentifier)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(colors.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 16)
+
+            Button("移除") {
+                removeExcludedBundleIdentifier(app.bundleIdentifier)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .buttonStyle(SettingsGlassButtonStyle(colors: colors, isDestructive: true))
+        }
+        .frame(minHeight: 44)
     }
 }
 
