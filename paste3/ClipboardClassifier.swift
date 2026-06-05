@@ -110,14 +110,18 @@ enum ClipboardClassifier {
     }
 
     static func buildSearchText(text: String, kind: ClipboardKind, source: ClipboardSource) -> String {
+        // Long clipboard entries can be much larger than the searchable prefix.
+        // Limit the text before joining/lowercasing so capture does not spend
+        // main-thread time normalizing content that will be discarded anyway.
+        let searchableText = String(text.prefix(maxSearchTextLength))
         let parts = [
-            text,
+            searchableText,
             kind.rawValue,
             source.appName,
             source.bundleIdentifier,
         ]
 
-        return String(parts.compactMap { $0 }.joined(separator: " ").lowercased().prefix(maxSearchTextLength))
+        return String(parts.compactMap { $0 }.joined(separator: " ").prefix(maxSearchTextLength)).lowercased()
     }
 
     static func matches(_ item: ClipboardItem, query: String) -> Bool {

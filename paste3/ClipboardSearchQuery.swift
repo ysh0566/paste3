@@ -109,7 +109,7 @@ struct ClipboardSearchQuery: Equatable {
             return true
         }
 
-        for term in terms where !item.searchText.localizedCaseInsensitiveContains(term) {
+        for term in terms where !item.searchText.contains(term) {
             return false
         }
 

@@ -179,7 +179,8 @@ final class ClipboardStore {
             return items
         }
 
-        return items.filter { ClipboardClassifier.matches($0, query: trimmedQuery) }
+        let parsedQuery = ClipboardSearchQuery.parse(trimmedQuery)
+        return items.filter { parsedQuery.matches($0) }
     }
 
     func itemsPage(
@@ -188,9 +189,12 @@ final class ClipboardStore {
         matchingKinds kinds: [ClipboardKind]? = nil,
         matching query: ClipboardSearchQuery? = nil,
         matchingItemIDs itemIDs: Set<UUID>? = nil,
-        pinboardNamesByItemID: [UUID: [String]] = [:]
+        pinboardNamesByItemID: [UUID: [String]] = [:],
+        pruneExpiredItems: Bool = true
     ) throws -> [ClipboardItem] {
-        try pruneExpiredItemsIfNeeded()
+        if pruneExpiredItems {
+            try pruneExpiredItemsIfNeeded()
+        }
 
         let query = query ?? ClipboardSearchQuery.parse("")
         let sortBy = [SortDescriptor(\ClipboardItem.createdAt, order: .reverse)]

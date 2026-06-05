@@ -60,9 +60,11 @@ struct ContentView: View {
     @State private var copiedItemID: UUID?
     @State private var isCommandKeyPressed = false
     @State private var items: [ClipboardItem] = []
+    @State private var loadedItemIDs: Set<UUID> = []
     @State private var itemFetchOffset = 0
     @State private var canLoadMoreItems = true
     @State private var isLoadingItems = false
+    @State private var searchReloadTask: Task<Void, Never>?
 #if os(macOS)
     @State private var commandShortcutMonitor: Any?
 #endif
@@ -200,6 +202,7 @@ struct ContentView: View {
             installCommandShortcutMonitor(cards: historySnapshot.cards)
         }
         .onDisappear {
+            cancelScheduledSearchReload()
             uninstallCommandShortcutMonitor()
         }
         .onChange(of: cardIDs) { _, newIDs in
@@ -212,13 +215,15 @@ struct ContentView: View {
             }
         }
         .onChange(of: selectedFilter) { _, _ in
+            cancelScheduledSearchReload()
             reloadHistoryItems(fillVisibleResults: true)
         }
         .onChange(of: selectedPinboardID) { _, _ in
+            cancelScheduledSearchReload()
             reloadHistoryItems(fillVisibleResults: true)
         }
         .onChange(of: searchText) { _, _ in
-            reloadHistoryItems(fillVisibleResults: true)
+            scheduleSearchReload()
         }
         .onKeyPress(.leftArrow) {
             moveSelection(.previous, in: cardIDs)
@@ -728,6 +733,7 @@ struct ContentView: View {
         do {
             try ClipboardStore(modelContext: modelContext).delete(item)
             items.removeAll { $0.id == item.id }
+            loadedItemIDs.remove(item.id)
         } catch {
             assertionFailure("Failed to delete clipboard item: \(error)")
         }
@@ -745,6 +751,7 @@ struct ContentView: View {
         itemFetchOffset = 0
         canLoadMoreItems = true
         items = []
+        loadedItemIDs = []
         selectedItemID = nil
         loadNextHistoryPage(fillVisibleResults: fillVisibleResults)
     }
@@ -767,15 +774,20 @@ struct ContentView: View {
         defer { isLoadingItems = false }
 
         var fetchedPageCount = 0
+        let store = ClipboardStore(modelContext: modelContext)
+        let searchQuery = parsedSearchQuery()
+        let scopedItemIDs = scopedItemIDs(for: searchQuery)
+        let pinboardNamesByItemID = pinboardNamesByItemID()
         repeat {
             do {
-                let page = try ClipboardStore(modelContext: modelContext).itemsPage(
+                let page = try store.itemsPage(
                     offset: itemFetchOffset,
                     limit: HistoryPagination.pageSize,
                     matchingKinds: selectedFilter.matchingKinds,
-                    matching: parsedSearchQuery(),
-                    matchingItemIDs: scopedItemIDs(),
-                    pinboardNamesByItemID: pinboardNamesByItemID()
+                    matching: searchQuery,
+                    matchingItemIDs: scopedItemIDs,
+                    pinboardNamesByItemID: pinboardNamesByItemID,
+                    pruneExpiredItems: fetchedPageCount == 0
                 )
                 itemFetchOffset += page.count
                 canLoadMoreItems = page.count == HistoryPagination.pageSize
@@ -794,37 +806,39 @@ struct ContentView: View {
     }
 
     private func appendUniqueHistoryItems(_ page: [ClipboardItem]) {
-        let existingIDs = Set(items.map(\.id))
-        items.append(contentsOf: page.filter { !existingIDs.contains($0.id) })
+        for item in page where loadedItemIDs.insert(item.id).inserted {
+            items.append(item)
+        }
     }
 
     private func currentVisibleItemCount() -> Int {
-        let parsedQuery = parsedSearchQuery()
-        let pinsByItemID = Dictionary(grouping: pinnedItems, by: \.clipboardItemID)
-        let pinboardNamesByID = Dictionary(uniqueKeysWithValues: pinboards.map { ($0.id, $0.name) })
-        let sourceItems: [ClipboardItem]
+        items.count
+    }
 
-        if let selectedPinboardID {
-            let boardItemIDs = Set(pinnedItems.filter { $0.pinboardID == selectedPinboardID }.map(\.clipboardItemID))
-            sourceItems = items.filter { boardItemIDs.contains($0.id) }
-        } else {
-            sourceItems = items
+    private func scheduleSearchReload() {
+        cancelScheduledSearchReload()
+        searchReloadTask = Task { @MainActor in
+            // Debounce typing so a multi-character query does not trigger one
+            // SwiftData page load per keystroke.
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+            reloadHistoryItems(fillVisibleResults: true)
+            searchReloadTask = nil
         }
+    }
 
-        return sourceItems.filter { item in
-            let pinnedPinboardNames = (pinsByItemID[item.id] ?? [])
-                .compactMap { pinboardNamesByID[$0.pinboardID] }
-            return selectedFilter.matches(item) &&
-                (parsedQuery.isEmpty || parsedQuery.matches(item, pinboardNames: pinnedPinboardNames))
-        }.count
+    private func cancelScheduledSearchReload() {
+        searchReloadTask?.cancel()
+        searchReloadTask = nil
     }
 
     private func parsedSearchQuery() -> ClipboardSearchQuery {
         ClipboardSearchQuery.parse(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private func scopedItemIDs() -> Set<UUID>? {
-        let query = parsedSearchQuery()
+    private func scopedItemIDs(for query: ClipboardSearchQuery) -> Set<UUID>? {
         var scopes: [Set<UUID>] = []
 
         if let selectedPinboardID {
