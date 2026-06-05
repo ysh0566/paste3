@@ -499,6 +499,14 @@ struct paste3Tests {
     }
 #endif
 
+    @Test func clickingUnselectedCardSelectsIt() {
+        #expect(ClipboardCardClickAction.resolve(isSelected: false) == .select)
+    }
+
+    @Test func clickingSelectedCardCopiesIt() {
+        #expect(ClipboardCardClickAction.resolve(isSelected: true) == .copy)
+    }
+
     @Test func clipboardRetentionPreferencePersistsSelection() throws {
         let suiteName = "paste3Tests.retention.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

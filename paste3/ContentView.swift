@@ -918,9 +918,7 @@ struct ContentView: View {
     }
 
     private func focusHistory() {
-        Task { @MainActor in
-            historyHasKeyboardFocus = true
-        }
+        historyHasKeyboardFocus = true
     }
 
     private func normalizeSelection(in cardIDs: [UUID]) {
@@ -1053,6 +1051,15 @@ struct ContentView: View {
         } else {
             onDismiss?()
         }
+    }
+}
+
+enum ClipboardCardClickAction: Equatable {
+    case select
+    case copy
+
+    static func resolve(isSelected: Bool) -> ClipboardCardClickAction {
+        isSelected ? .copy : .select
     }
 }
 
@@ -1519,16 +1526,13 @@ private struct ClipboardCard: View {
     }
 
     private var tapGesture: some Gesture {
-        // Double-click keeps the previous copy-back behavior, while a single
-        // click only changes selection.
-        TapGesture(count: 2)
-            .exclusively(before: TapGesture(count: 1))
-            .onEnded { result in
-                switch result {
-                case .first:
-                    copyAction()
-                case .second:
+        TapGesture(count: 1)
+            .onEnded {
+                switch ClipboardCardClickAction.resolve(isSelected: isSelected) {
+                case .select:
                     selectAction()
+                case .copy:
+                    copyAction()
                 }
             }
     }
@@ -1612,7 +1616,7 @@ private struct ClipboardCard: View {
                 Label("Delete", systemImage: "trash")
             }
         }
-        .help("Click to select. Double-click to copy. Right-click to pin or delete.")
+        .help("Click to select. Click the selected card to copy. Right-click to pin or delete.")
     }
 
     private var staticContent: some View {
