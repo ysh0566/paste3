@@ -483,6 +483,20 @@ struct paste3Tests {
         let reloadedPreference = QuickPanelShortcutPreference(defaults: defaults)
         #expect(reloadedPreference.shortcut == .commandOptionV)
     }
+
+    @Test func commandCResolvesToSelectedClipboardCardCopy() {
+        let action = ClipboardHistoryKeyboardAction.resolve(keyCode: 8, modifierFlags: [.command])
+
+        #expect(action == .copySelectedCard)
+    }
+
+    @Test func commandNumberStillResolvesToIndexedClipboardCardCopy() {
+        let topRowAction = ClipboardHistoryKeyboardAction.resolve(keyCode: 18, modifierFlags: [.command])
+        let keypadAction = ClipboardHistoryKeyboardAction.resolve(keyCode: 83, modifierFlags: [.command])
+
+        #expect(topRowAction == .copyCardAtIndex(0))
+        #expect(keypadAction == .copyCardAtIndex(0))
+    }
 #endif
 
     @Test func clipboardRetentionPreferencePersistsSelection() throws {

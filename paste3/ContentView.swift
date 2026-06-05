@@ -965,6 +965,17 @@ struct ContentView: View {
         copy(selectedCard, shouldPaste: true)
     }
 
+    private func copySelectedItem(in cards: [ClipboardCardSnapshot]) {
+        let selectedCard = selectedItemID
+            .flatMap { selectedID in cards.first(where: { $0.id == selectedID }) } ?? cards.first
+
+        guard let selectedCard else {
+            return
+        }
+
+        copy(selectedCard, shouldPaste: false)
+    }
+
     private func shortcutNumber(forCardAt index: Int) -> Int? {
         guard displayMode == .floatingPanel, isCommandKeyPressed, index < 9 else {
             return nil
@@ -987,14 +998,25 @@ struct ContentView: View {
                 isCommandKeyPressed = Self.commandKeyIsPressed(in: event.modifierFlags)
                 return event
             case .keyDown:
-                guard Self.commandKeyIsPressed(in: event.modifierFlags),
-                      let cardIndex = Self.cardShortcutIndex(for: event),
-                      cards.indices.contains(cardIndex) else {
+                guard let action = ClipboardHistoryKeyboardAction.resolve(
+                    keyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags
+                ) else {
                     return event
                 }
 
-                copy(cards[cardIndex], shouldPaste: false)
-                return nil
+                switch action {
+                case .copySelectedCard:
+                    copySelectedItem(in: cards)
+                    return nil
+                case .copyCardAtIndex(let cardIndex):
+                    guard cards.indices.contains(cardIndex) else {
+                        return event
+                    }
+
+                    copy(cards[cardIndex], shouldPaste: false)
+                    return nil
+                }
             default:
                 return event
             }
@@ -1018,11 +1040,53 @@ struct ContentView: View {
     private static func commandKeyIsPressed(in flags: NSEvent.ModifierFlags) -> Bool {
         flags.intersection(.deviceIndependentFlagsMask).contains(.command)
     }
+#endif
 
-    private static func cardShortcutIndex(for event: NSEvent) -> Int? {
+    private func copy(_ card: ClipboardCardSnapshot, shouldPaste: Bool) {
+        ClipboardWriter.copyBack(card.item)
+        selectedItemID = card.id
+        copiedItemID = card.id
+        touch(card.item)
+
+        if shouldPaste, let onPasteRequest {
+            onPasteRequest()
+        } else {
+            onDismiss?()
+        }
+    }
+}
+
+#if os(macOS)
+enum ClipboardHistoryKeyboardAction: Equatable {
+    case copySelectedCard
+    case copyCardAtIndex(Int)
+
+    static func resolve(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> ClipboardHistoryKeyboardAction? {
+        guard commandKeyIsPressed(in: modifierFlags) else {
+            return nil
+        }
+
+        if keyCode == Self.cKeyCode {
+            return .copySelectedCard
+        }
+
+        if let cardIndex = cardShortcutIndex(forKeyCode: keyCode) {
+            return .copyCardAtIndex(cardIndex)
+        }
+
+        return nil
+    }
+
+    private static let cKeyCode: UInt16 = 8
+
+    private static func commandKeyIsPressed(in flags: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    }
+
+    private static func cardShortcutIndex(forKeyCode keyCode: UInt16) -> Int? {
         // Accept both the top-row number keys and numeric keypad keys so Cmd+1..9
         // behaves consistently across compact and full-size keyboards.
-        switch event.keyCode {
+        switch keyCode {
         case 18, 83:
             0
         case 19, 84:
@@ -1045,21 +1109,8 @@ struct ContentView: View {
             nil
         }
     }
-#endif
-
-    private func copy(_ card: ClipboardCardSnapshot, shouldPaste: Bool) {
-        ClipboardWriter.copyBack(card.item)
-        selectedItemID = card.id
-        copiedItemID = card.id
-        touch(card.item)
-
-        if shouldPaste, let onPasteRequest {
-            onPasteRequest()
-        } else {
-            onDismiss?()
-        }
-    }
 }
+#endif
 
 private enum HistorySelectionDirection {
     case previous
