@@ -47,6 +47,17 @@ struct paste3Tests {
         #expect(candidate.searchText.contains("terminal"))
     }
 
+    @Test func classifierLimitsLargeTextAndSearchTextWork() throws {
+        let rawText = String(repeating: "a", count: ClipboardClassifier.maxStoredTextLength + 500)
+        let candidate = try #require(ClipboardClassifier.candidate(
+            from: rawText,
+            source: ClipboardSource(appName: "Notes", bundleIdentifier: "com.apple.Notes")
+        ))
+
+        #expect(candidate.text.count == ClipboardClassifier.maxStoredTextLength)
+        #expect(candidate.searchText.count == ClipboardClassifier.maxSearchTextLength)
+    }
+
     @Test func classifierPreservesWhitespaceAndLineEndingsInHash() throws {
         let source = ClipboardSource(appName: nil, bundleIdentifier: nil)
         let first = try #require(ClipboardClassifier.candidate(from: "hello\n", source: source))
@@ -320,6 +331,14 @@ struct paste3Tests {
         #expect(!ClipboardSearchQuery.parse("pin:Commands").matches(item, pinboardNames: ["PR Links"]))
     }
 
+    @Test func performanceProbeReturnsOperationResult() throws {
+        let result = try ClipboardPerformanceProbe.measure("test.probe") {
+            "ok"
+        }
+
+        #expect(result == "ok")
+    }
+
 #if os(macOS)
     @Test func capturePreferenceSkipsPausedAndExcludedApps() throws {
         let suiteName = "paste3Tests.capture.\(UUID().uuidString)"
@@ -373,6 +392,75 @@ struct paste3Tests {
         #expect(candidate.kind == .data)
         #expect(candidate.payloadType == payloadType.rawValue)
         #expect(candidate.payloadData == payload)
+    }
+
+    @Test func classifierBuildsCandidateFromSnapshotOffMainPath() async throws {
+        let source = ClipboardSource(appName: "Preview", bundleIdentifier: "com.apple.Preview")
+        let payload = Data([0x89, 0x50, 0x4E, 0x47])
+        let snapshot = ClipboardPasteboardSnapshot.payload(
+            kind: .image,
+            text: "PNG Image, 4 bytes",
+            payloadData: payload,
+            payloadType: NSPasteboard.PasteboardType.png.rawValue
+        )
+
+        let candidate = try #require(await ClipboardClassifier.candidate(from: snapshot, source: source))
+
+        #expect(candidate.kind == .image)
+        #expect(candidate.payloadData == payload)
+        #expect(candidate.byteSize == 4)
+    }
+
+    @Test func classifierBuildsLargePayloadSnapshotCandidate() async throws {
+        let source = ClipboardSource(appName: "Preview", bundleIdentifier: "com.apple.Preview")
+        let payload = Data(repeating: 0xFF, count: 10 * 1_024 * 1_024)
+        let snapshot = ClipboardPasteboardSnapshot.payload(
+            kind: .image,
+            text: "Large PNG Image, \(payload.count) bytes",
+            payloadData: payload,
+            payloadType: NSPasteboard.PasteboardType.png.rawValue
+        )
+
+        let candidate = try #require(await ClipboardClassifier.candidate(from: snapshot, source: source))
+
+        #expect(candidate.kind == .image)
+        #expect(candidate.byteSize == payload.count)
+        #expect(candidate.payloadData?.count == payload.count)
+    }
+
+    @Test func previewImageCacheReusesThumbnailAfterPayloadFileIsGone() throws {
+        let payloadStore = ClipboardPayloadStore.temporaryForTests()
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 2, height: 2).fill()
+        image.unlockFocus()
+
+        let tiffData = try #require(image.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: tiffData))
+        let pngData = try #require(bitmap.representation(using: .png, properties: [:]))
+        let payloadFileName = try payloadStore.write(pngData, payloadType: NSPasteboard.PasteboardType.png.rawValue)
+        let item = ClipboardItem(
+            kind: .image,
+            text: "PNG Image, \(pngData.count) bytes",
+            searchText: "png image",
+            sourceAppName: "Preview",
+            sourceBundleIdentifier: "com.apple.Preview",
+            contentHash: UUID().uuidString,
+            byteSize: pngData.count,
+            payloadType: NSPasteboard.PasteboardType.png.rawValue,
+            payloadFileName: payloadFileName
+        )
+        ClipboardPreviewImageCache.shared.removeImage(for: item)
+        defer {
+            ClipboardPreviewImageCache.shared.removeImage(for: item)
+        }
+
+        let first = try #require(ClipboardPreviewImageCache.shared.image(for: item, payloadStore: payloadStore))
+        try payloadStore.delete(fileName: payloadFileName)
+        let second = try #require(ClipboardPreviewImageCache.shared.image(for: item, payloadStore: payloadStore))
+
+        #expect(first === second)
     }
 
     @Test func quickPanelShortcutFallsBackToCommandShiftV() {
@@ -464,6 +552,33 @@ struct paste3Tests {
         #expect(allItems.map(\.text) == ["old but kept"])
     }
 
+    @Test func storePrunesExpiredItemsInBatches() throws {
+        let now = Date()
+        let context = try makeContext()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "day-1"),
+            referenceDateProvider: { now }
+        )
+        let source = ClipboardSource(appName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode")
+
+        for index in 0..<620 {
+            let candidate = try #require(ClipboardClassifier.candidate(from: "old \(index)", source: source))
+            let item = try #require(try store.insert(candidate))
+            item.createdAt = now.addingTimeInterval(-2 * 24 * 60 * 60 - TimeInterval(index))
+        }
+
+        let freshCandidate = try #require(ClipboardClassifier.candidate(from: "fresh", source: source))
+        let fresh = try #require(try store.insert(freshCandidate))
+        fresh.createdAt = now
+        try context.save()
+
+        try store.pruneExpiredItemsIfNeeded()
+
+        let allItems = try store.items()
+        #expect(allItems.map(\.text) == ["fresh"])
+    }
+
     @Test func storeItemsPageUsesOffsetLimitAndKindFilter() throws {
         let now = Date()
         let context = try makeContext()
@@ -521,6 +636,53 @@ struct paste3Tests {
 
         let appMatches = try store.itemsPage(offset: 0, limit: 10, matching: .parse("app:terminal"))
         #expect(appMatches.map(\.text) == ["git status"])
+    }
+
+    @Test func searchIndexReturnsInsertedClipboardItemIDs() throws {
+        let context = try makeContext()
+        let searchIndex = ClipboardSearchIndex.temporaryForTests()
+        let store = ClipboardStore(
+            modelContext: context,
+            retentionPeriod: ClipboardRetentionPeriod.find(id: "forever"),
+            searchIndex: searchIndex
+        )
+        let source = ClipboardSource(appName: "Terminal", bundleIdentifier: "com.apple.Terminal")
+
+        let kubectlCandidate = try #require(ClipboardClassifier.candidate(from: "kubectl get pods", source: source))
+        let first = try #require(try store.insert(kubectlCandidate))
+        let ordinaryCandidate = try #require(ClipboardClassifier.candidate(from: "ordinary note", source: source))
+        _ = try store.insert(ordinaryCandidate)
+
+        let ids = try searchIndex.searchIDs(primaryTerm: "kubectl", limit: 10, offset: 0)
+        let page = try store.itemsPage(offset: 0, limit: 10, matching: .parse("kubectl"))
+
+        #expect(ids.contains(first.id))
+        #expect(page.map(\.id) == [first.id])
+    }
+
+    @Test func searchIndexFindsTargetInLargeHistoryCandidateSet() throws {
+        let searchIndex = ClipboardSearchIndex.temporaryForTests()
+        let targetID = UUID()
+        var items: [ClipboardItem] = []
+
+        for index in 0..<5_000 {
+            let isTarget = index == 4_321
+            items.append(ClipboardItem(
+                id: isTarget ? targetID : UUID(),
+                kind: .text,
+                text: isTarget ? "needle target" : "ordinary history \(index)",
+                searchText: isTarget ? "needle target text" : "ordinary history \(index)",
+                sourceAppName: "Test",
+                sourceBundleIdentifier: "test.app",
+                contentHash: "history-\(index)",
+                byteSize: 1
+            ))
+        }
+
+        try searchIndex.rebuild(from: items)
+
+        let ids = try searchIndex.searchIDs(primaryTerm: "needle", limit: 10, offset: 0)
+        #expect(ids == [targetID])
     }
 
     private func makeContext() throws -> ModelContext {

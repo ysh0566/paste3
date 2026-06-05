@@ -12,12 +12,12 @@ import Foundation
 import AppKit
 #endif
 
-struct ClipboardSource: Equatable {
+struct ClipboardSource: Equatable, Sendable {
     var appName: String?
     var bundleIdentifier: String?
 }
 
-struct ClipboardItemCandidate: Equatable {
+struct ClipboardItemCandidate: Equatable, Sendable {
     var kind: ClipboardKind
     var text: String
     var searchText: String
@@ -33,7 +33,7 @@ enum ClipboardClassifier {
     static let maxSearchTextLength = 8_000
     static let maxStoredPayloadBytes = 20 * 1_024 * 1_024
 
-    static func candidate(from rawText: String, source: ClipboardSource) -> ClipboardItemCandidate? {
+    nonisolated static func candidate(from rawText: String, source: ClipboardSource) -> ClipboardItemCandidate? {
         let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
@@ -60,7 +60,7 @@ enum ClipboardClassifier {
         )
     }
 
-    static func candidate(
+    nonisolated static func candidate(
         kind: ClipboardKind,
         text: String,
         payloadData: Data?,
@@ -90,14 +90,14 @@ enum ClipboardClassifier {
         )
     }
 
-    static func normalizeForClassification(_ text: String) -> String {
+    nonisolated static func normalizeForClassification(_ text: String) -> String {
         text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
     }
 
-    static func classify(normalizedText: String, originalText: String) -> ClipboardKind {
+    nonisolated static func classify(normalizedText: String, originalText: String) -> ClipboardKind {
         if isURL(normalizedText) {
             return .url
         }
@@ -109,7 +109,7 @@ enum ClipboardClassifier {
         return .text
     }
 
-    static func buildSearchText(text: String, kind: ClipboardKind, source: ClipboardSource) -> String {
+    nonisolated static func buildSearchText(text: String, kind: ClipboardKind, source: ClipboardSource) -> String {
         // Long clipboard entries can be much larger than the searchable prefix.
         // Limit the text before joining/lowercasing so capture does not spend
         // main-thread time normalizing content that will be discarded anyway.
@@ -128,7 +128,7 @@ enum ClipboardClassifier {
         ClipboardSearchQuery.parse(query).matches(item)
     }
 
-    private static func isURL(_ text: String) -> Bool {
+    private nonisolated static func isURL(_ text: String) -> Bool {
         guard !text.contains(where: \.isWhitespace) else {
             return false
         }
@@ -140,7 +140,7 @@ enum ClipboardClassifier {
         return text.hasPrefix("www.") && text.contains(".")
     }
 
-    private static func isCommandLike(_ text: String) -> Bool {
+    private nonisolated static func isCommandLike(_ text: String) -> Bool {
         let firstLine = text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? text
         let lowered = firstLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let commandPrefixes = [
@@ -162,11 +162,11 @@ enum ClipboardClassifier {
         return text.contains("\n") && codeSignals.contains(where: { text.contains($0) })
     }
 
-    private static func hash(text: String, source: ClipboardSource) -> String {
+    private nonisolated static func hash(text: String, source: ClipboardSource) -> String {
         hash(kind: nil, text: text, payloadData: nil, payloadType: nil, source: source)
     }
 
-    private static func hash(
+    private nonisolated static func hash(
         kind: ClipboardKind?,
         text: String,
         payloadData: Data?,
@@ -193,13 +193,13 @@ enum ClipboardClassifier {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func normalizeSourceComponent(_ value: String?) -> String {
+    private nonisolated static func normalizeSourceComponent(_ value: String?) -> String {
         value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
     }
 
-    private static func hashField(_ name: String, _ value: String) -> String {
+    private nonisolated static func hashField(_ name: String, _ value: String) -> String {
         "\(name):\(value.utf8.count):\(value)\n"
     }
 }
@@ -228,6 +228,39 @@ extension ClipboardClassifier {
         }
 
         return dataCandidate(from: pasteboard, source: source)
+    }
+
+    static func candidate(from snapshot: ClipboardPasteboardSnapshot, source: ClipboardSource) async -> ClipboardItemCandidate? {
+        await Task.detached(priority: .utility) {
+            switch snapshot {
+            case .file(let paths):
+                return candidate(
+                    kind: .file,
+                    text: paths.joined(separator: "\n"),
+                    payloadData: nil,
+                    payloadType: NSPasteboard.PasteboardType.fileURL.rawValue,
+                    source: source
+                )
+            case .payload(let kind, let text, let payloadData, let payloadType):
+                return candidate(
+                    kind: kind,
+                    text: text,
+                    payloadData: payloadData,
+                    payloadType: payloadType,
+                    source: source
+                )
+            case .text(let text):
+                return candidate(from: text, source: source)
+            case .genericData(let payloadData, let payloadType):
+                return candidate(
+                    kind: .data,
+                    text: "\(payloadType), \(payloadData.count) bytes",
+                    payloadData: payloadData,
+                    payloadType: payloadType,
+                    source: source
+                )
+            }
+        }.value
     }
 
     private static func fileCandidate(from pasteboard: NSPasteboard, source: ClipboardSource) -> ClipboardItemCandidate? {
@@ -314,7 +347,7 @@ extension ClipboardClassifier {
         )
     }
 
-    private static func imageSummary(type: NSPasteboard.PasteboardType, byteSize: Int) -> String {
+    static func imageSummary(type: NSPasteboard.PasteboardType, byteSize: Int) -> String {
         let format = type == .png ? "PNG" : "TIFF"
         return "\(format) Image, \(byteSize) bytes"
     }
@@ -339,7 +372,7 @@ extension ClipboardClassifier {
         return nil
     }
 
-    private static func shouldStoreGenericData(_ type: NSPasteboard.PasteboardType) -> Bool {
+    static func shouldStoreGenericData(_ type: NSPasteboard.PasteboardType) -> Bool {
         let rawValue = type.rawValue
         let skippedTypes = [
             NSPasteboard.PasteboardType.string.rawValue,

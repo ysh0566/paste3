@@ -7,8 +7,7 @@
 
 import Foundation
 
-@MainActor
-final class ClipboardPayloadStore {
+final class ClipboardPayloadStore: Sendable {
     static let shared = ClipboardPayloadStore()
 
     let directoryURL: URL

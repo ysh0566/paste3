@@ -1,6 +1,6 @@
 //
 //  Paste3Theme.swift
-//  paste3
+//  Paste3
 //
 //  Created by Codex on 2026/5/7.
 //
@@ -76,6 +76,11 @@ enum Paste3Theme {
             error: Color(red: 0.729, green: 0.102, blue: 0.102)
         )
     }
+}
+
+enum Paste3GlassSurfaceRenderingMode {
+    case full
+    case lightweight
 }
 
 struct Paste3GlassShell: ViewModifier {
@@ -175,55 +180,75 @@ struct Paste3GlassSurface: ViewModifier {
     let cornerRadius: CGFloat
     let fill: Color
     let isProminent: Bool
+    let renderingMode: Paste3GlassSurfaceRenderingMode
 
     func body(content: Content) -> some View {
         let palette = Paste3Theme.palette(for: colorScheme)
 
         content
             .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(fill)
-                    }
-                    // Two opposing strokes create the refractive edge that makes
-                    // flat controls read as glass without hiding their content.
-                    .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(
-                                AngularGradient(
-                                    colors: [
-                                        palette.edgeHighlight,
-                                        palette.border.opacity(0.30),
-                                        palette.glassGlow.opacity(isProminent ? 0.95 : 0.46),
-                                        palette.edgeHighlight.opacity(0.35),
-                                        palette.edgeHighlight
-                                    ],
-                                    center: .center
-                                ),
-                                lineWidth: isProminent ? 1.2 : 0.8
-                            )
-                    }
-                    .overlay(alignment: .topLeading) {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(palette.edgeHighlight.opacity(colorScheme == .dark ? 0.14 : 0.52), lineWidth: 1)
-                            .blur(radius: 0.45)
-                            .padding(1)
-                            .mask(
-                                LinearGradient(
-                                    colors: [.black, .clear],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                switch renderingMode {
+                case .full:
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .fill(fill)
+                        }
+                        // Two opposing strokes create the refractive edge that makes
+                        // flat controls read as glass without hiding their content.
+                        .overlay {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .stroke(
+                                    AngularGradient(
+                                        colors: [
+                                            palette.edgeHighlight,
+                                            palette.border.opacity(0.30),
+                                            palette.glassGlow.opacity(isProminent ? 0.95 : 0.46),
+                                            palette.edgeHighlight.opacity(0.35),
+                                            palette.edgeHighlight
+                                        ],
+                                        center: .center
+                                    ),
+                                    lineWidth: isProminent ? 1.2 : 0.8
                                 )
-                            )
-                    }
-                    .shadow(
-                        color: palette.glassShadow.opacity(isProminent ? 0.76 : 0.46),
-                        radius: isProminent ? 18 : 10,
-                        x: 0,
-                        y: isProminent ? 10 : 5
-                    )
+                        }
+                        .overlay(alignment: .topLeading) {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .stroke(palette.edgeHighlight.opacity(colorScheme == .dark ? 0.14 : 0.52), lineWidth: 1)
+                                .blur(radius: 0.45)
+                                .padding(1)
+                                .mask(
+                                    LinearGradient(
+                                        colors: [.black, .clear],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        }
+                        .shadow(
+                            color: palette.glassShadow.opacity(isProminent ? 0.76 : 0.46),
+                            radius: isProminent ? 18 : 10,
+                            x: 0,
+                            y: isProminent ? 10 : 5
+                        )
+                case .lightweight:
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(fill)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .stroke(
+                                    palette.edgeHighlight.opacity(colorScheme == .dark ? 0.16 : 0.34),
+                                    lineWidth: isProminent ? 1.1 : 0.8
+                                )
+                        }
+                        .shadow(
+                            color: palette.glassShadow.opacity(isProminent ? 0.40 : 0.22),
+                            radius: isProminent ? 10 : 6,
+                            x: 0,
+                            y: isProminent ? 6 : 3
+                        )
+                }
             }
     }
 }
@@ -259,8 +284,14 @@ extension View {
     func paste3GlassSurface(
         cornerRadius: CGFloat,
         fill: Color,
-        isProminent: Bool = false
+        isProminent: Bool = false,
+        renderingMode: Paste3GlassSurfaceRenderingMode = .full
     ) -> some View {
-        modifier(Paste3GlassSurface(cornerRadius: cornerRadius, fill: fill, isProminent: isProminent))
+        modifier(Paste3GlassSurface(
+            cornerRadius: cornerRadius,
+            fill: fill,
+            isProminent: isProminent,
+            renderingMode: renderingMode
+        ))
     }
 }

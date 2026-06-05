@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-enum ClipboardKind: String, CaseIterable, Identifiable {
+enum ClipboardKind: String, CaseIterable, Identifiable, Sendable {
     case text
     case url
     case command
@@ -44,6 +44,12 @@ enum ClipboardKind: String, CaseIterable, Identifiable {
 
 @Model
 final class ClipboardItem {
+    #Index<ClipboardItem>(
+        [\.contentHash],
+        [\.createdAt],
+        [\.kindRawValue]
+    )
+
     var id: UUID
     var createdAt: Date
     var kindRawValue: String

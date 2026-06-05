@@ -111,17 +111,20 @@ final class ClipboardStore {
     private let modelContext: ModelContext
     private let retentionPeriod: ClipboardRetentionPeriod
     private let payloadStore: ClipboardPayloadStore
+    private let searchIndex: ClipboardSearchIndex?
     private let referenceDateProvider: () -> Date
 
     init(
         modelContext: ModelContext,
         retentionPeriod: ClipboardRetentionPeriod? = nil,
         payloadStore: ClipboardPayloadStore? = nil,
+        searchIndex: ClipboardSearchIndex? = nil,
         referenceDateProvider: @escaping () -> Date = Date.init
     ) {
         self.modelContext = modelContext
         self.retentionPeriod = retentionPeriod ?? ClipboardRetentionPreference.shared.period
         self.payloadStore = payloadStore ?? ClipboardPayloadStore.shared
+        self.searchIndex = searchIndex ?? ClipboardSearchIndex.shared
         self.referenceDateProvider = referenceDateProvider
     }
 
@@ -156,6 +159,7 @@ final class ClipboardStore {
         do {
             modelContext.insert(item)
             try modelContext.save()
+            try searchIndex?.upsert(item)
             try pruneExpiredItemsIfNeeded()
             return item
         } catch {
@@ -223,24 +227,37 @@ final class ClipboardStore {
         let hasPrimarySearchTerm = !primarySearchTerm.isEmpty
         let scopedItemIDs = itemIDs.map(Array.init) ?? []
         let hasItemIDScope = itemIDs != nil
+        let indexedItemIDs = indexedItemIDs(
+            primarySearchTerm: primarySearchTerm,
+            candidateLimit: 5_000,
+            enabled: hasPrimarySearchTerm && !hasItemIDScope
+        )
+        if indexedItemIDs?.isEmpty == true {
+            return []
+        }
         var candidateOffset = 0
         var skippedMatches = 0
         var pageItems: [ClipboardItem] = []
         let candidateLimit = max(limit * 4, 100)
+        let activeScopedItemIDs = indexedItemIDs ?? scopedItemIDs
+        let activeHasItemIDScope = indexedItemIDs != nil || hasItemIDScope
+        let shouldFilterBySearchText = hasPrimarySearchTerm && indexedItemIDs == nil
 
         while pageItems.count < limit {
             var descriptor = FetchDescriptor<ClipboardItem>(
                 predicate: #Predicate { item in
                     (!hasKindFilter || rawValues.contains(item.kindRawValue)) &&
-                        (!hasPrimarySearchTerm || item.searchText.contains(primarySearchTerm)) &&
-                        (!hasItemIDScope || scopedItemIDs.contains(item.id))
+                        (!shouldFilterBySearchText || item.searchText.contains(primarySearchTerm)) &&
+                        (!activeHasItemIDScope || activeScopedItemIDs.contains(item.id))
                 },
                 sortBy: sortBy
             )
             descriptor.fetchOffset = candidateOffset
             descriptor.fetchLimit = candidateLimit
 
-            let candidates = try modelContext.fetch(descriptor)
+            let candidates = try ClipboardPerformanceProbe.measure("clipboard.itemsPage.fetch") {
+                try modelContext.fetch(descriptor)
+            }
             guard !candidates.isEmpty else {
                 break
             }
@@ -274,6 +291,7 @@ final class ClipboardStore {
         try deletePayloadIfNeeded(for: item)
         modelContext.delete(item)
         try modelContext.save()
+        try searchIndex?.delete(itemID: item.id)
     }
 
     func touch(_ item: ClipboardItem) throws {
@@ -288,6 +306,7 @@ final class ClipboardStore {
         }
         try modelContext.delete(model: ClipboardItem.self)
         try modelContext.save()
+        try searchIndex?.rebuild(from: [])
     }
 
     func pruneExpiredItemsIfNeeded() throws {
@@ -295,21 +314,27 @@ final class ClipboardStore {
             return
         }
 
-        let descriptor = FetchDescriptor<ClipboardItem>(
-            predicate: #Predicate { item in
-                item.createdAt < cutoffDate
-            }
-        )
-        let expiredItems = try modelContext.fetch(descriptor)
-        guard !expiredItems.isEmpty else {
-            return
-        }
+        while true {
+            var descriptor = FetchDescriptor<ClipboardItem>(
+                predicate: #Predicate { item in
+                    item.createdAt < cutoffDate
+                },
+                sortBy: [SortDescriptor(\.createdAt)]
+            )
+            descriptor.fetchLimit = ClipboardStoreBatching.pruneBatchSize
 
-        for item in expiredItems {
-            try deletePayloadIfNeeded(for: item)
-            modelContext.delete(item)
+            let expiredItems = try modelContext.fetch(descriptor)
+            guard !expiredItems.isEmpty else {
+                return
+            }
+
+            for item in expiredItems {
+                try deletePayloadIfNeeded(for: item)
+                modelContext.delete(item)
+                try searchIndex?.delete(itemID: item.id)
+            }
+            try modelContext.save()
         }
-        try modelContext.save()
     }
 
     func payloadData(for item: ClipboardItem) throws -> Data? {
@@ -341,4 +366,23 @@ final class ClipboardStore {
 
         try payloadStore.delete(fileName: payloadFileName)
     }
+
+    private func indexedItemIDs(primarySearchTerm: String, candidateLimit: Int, enabled: Bool) -> [UUID]? {
+        guard enabled,
+              let searchIndex,
+              ClipboardSearchIndex.canSearch(primaryTerm: primarySearchTerm)
+        else {
+            return nil
+        }
+
+        return try? searchIndex.searchIDs(
+            primaryTerm: primarySearchTerm,
+            limit: candidateLimit,
+            offset: 0
+        )
+    }
+}
+
+private enum ClipboardStoreBatching {
+    static let pruneBatchSize = 250
 }

@@ -1,6 +1,6 @@
 //
 //  SettingsWindowController.swift
-//  paste3
+//  Paste3
 //
 //  Created by Codex on 2026/5/8.
 //
@@ -37,7 +37,7 @@ final class SettingsWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "paste3 Settings"
+        window.title = "Paste3 Settings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = .clear

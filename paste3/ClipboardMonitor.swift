@@ -16,6 +16,7 @@ final class ClipboardMonitor {
     private let modelContext: ModelContext
     private let pollInterval: TimeInterval
     private var timer: Timer?
+    private var captureTask: Task<Void, Never>?
     private var lastChangeCount: Int
 
     init(modelContext: ModelContext, pollInterval: TimeInterval = 0.75) {
@@ -39,6 +40,8 @@ final class ClipboardMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        captureTask?.cancel()
+        captureTask = nil
     }
 
     func poll() throws {
@@ -56,11 +59,26 @@ final class ClipboardMonitor {
             return
         }
 
-        guard let candidate = ClipboardClassifier.candidate(from: pasteboard, source: source) else {
+        guard let snapshot = ClipboardPasteboardSnapshot.capture(from: pasteboard) else {
             return
         }
 
-        try ClipboardStore(modelContext: modelContext).insert(candidate)
+        captureTask?.cancel()
+        captureTask = Task { @MainActor [modelContext] in
+            guard let candidate = await ClipboardPerformanceProbe.measure("clipboard.candidate", {
+                await ClipboardClassifier.candidate(from: snapshot, source: source)
+            }) else {
+                return
+            }
+
+            do {
+                try ClipboardPerformanceProbe.measure("clipboard.insert") {
+                    try ClipboardStore(modelContext: modelContext).insert(candidate)
+                }
+            } catch {
+                assertionFailure("Failed to insert clipboard candidate: \(error)")
+            }
+        }
     }
 
     private func currentSource() -> ClipboardSource {

@@ -10,6 +10,7 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
+import Combine
 #endif
 
 enum HistoryDisplayMode {
@@ -422,6 +423,18 @@ struct ContentView: View {
     }
 
     private var filterTabs: some View {
+        ViewThatFits(in: .horizontal) {
+            filterTabRow(style: .full)
+            filterTabRow(style: .compact)
+        }
+        .padding(2)
+        .paste3GlassSurface(
+            cornerRadius: 18,
+            fill: colorScheme == .dark ? Color.black.opacity(0.18) : Color.white.opacity(0.20)
+        )
+    }
+
+    private func filterTabRow(style: FilterTabStyle) -> some View {
         HStack(spacing: 2) {
             ForEach(ClipboardFilter.allCases) { filter in
                 Button {
@@ -431,11 +444,20 @@ struct ContentView: View {
                     HStack(spacing: 6) {
                         Image(systemName: filter.systemImage)
                             .font(.system(size: 11, weight: .semibold))
-                        Text(filter.title)
+
+                        if style == .full {
+                            Text(filter.title)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
                     }
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selectedFilter == filter ? palette.primaryText : palette.secondaryText)
-                    .padding(.horizontal, 12)
+                    .frame(
+                        minWidth: style == .compact ? 30 : nil,
+                        minHeight: 30
+                    )
+                    .padding(.horizontal, style == .compact ? 7 : 12)
                     .padding(.vertical, 6)
                     .background {
                         if selectedFilter == filter {
@@ -459,13 +481,10 @@ struct ContentView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .help(filter.title)
+                .accessibilityLabel(filter.title)
             }
         }
-        .padding(2)
-        .paste3GlassSurface(
-            cornerRadius: 18,
-            fill: colorScheme == .dark ? Color.black.opacity(0.18) : Color.white.opacity(0.20)
-        )
     }
 
     private var searchField: some View {
@@ -576,6 +595,11 @@ struct ContentView: View {
                                 isSelected: selectedItemID == card.id,
                                 isCopied: copiedItemID == card.id,
                                 shortcutNumber: shortcutNumber(forCardAt: index),
+                                surfaceRenderingMode: cardSurfaceRenderingMode,
+                                allowsHoverEffects: displayMode == .window,
+                                allowsSelectionAnimation: displayMode == .window,
+                                allowsPreviewScrolling: displayMode == .window,
+                                usesAppIconAppearance: true,
                                 selectAction: {
                                     selectedItemID = card.id
                                     focusHistory()
@@ -620,6 +644,15 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var cardSurfaceRenderingMode: Paste3GlassSurfaceRenderingMode {
+        switch displayMode {
+        case .window:
+            .full
+        case .floatingPanel:
+            .lightweight
         }
     }
 
@@ -731,6 +764,9 @@ struct ContentView: View {
 
     private func delete(_ item: ClipboardItem) {
         do {
+#if os(macOS)
+            ClipboardPreviewImageCache.shared.removeImage(for: item)
+#endif
             try ClipboardStore(modelContext: modelContext).delete(item)
             items.removeAll { $0.id == item.id }
             loadedItemIDs.remove(item.id)
@@ -1028,6 +1064,11 @@ struct ContentView: View {
 private enum HistorySelectionDirection {
     case previous
     case next
+}
+
+private enum FilterTabStyle {
+    case full
+    case compact
 }
 
 private enum ClipboardFilter: CaseIterable, Identifiable {
@@ -1375,11 +1416,19 @@ private struct PinboardFramePreferenceKey: PreferenceKey {
 
 private struct ClipboardCard: View {
     @Environment(\.colorScheme) private var colorScheme
+#if os(macOS)
+    @ObservedObject private var appIconAppearanceCache = AppIconAppearanceCache.shared
+#endif
 
     let snapshot: ClipboardCardSnapshot
     let isSelected: Bool
     let isCopied: Bool
     let shortcutNumber: Int?
+    let surfaceRenderingMode: Paste3GlassSurfaceRenderingMode
+    let allowsHoverEffects: Bool
+    let allowsSelectionAnimation: Bool
+    let allowsPreviewScrolling: Bool
+    let usesAppIconAppearance: Bool
     let selectAction: () -> Void
     let copyAction: () -> Void
     let deleteAction: () -> Void
@@ -1394,21 +1443,6 @@ private struct ClipboardCard: View {
         Paste3Theme.palette(for: colorScheme)
     }
 
-    private let iconSize: CGFloat = 42
-    private let footerHeight: CGFloat = 26
-    private let previewPadding: CGFloat = 14
-
-    private var headerHeight: CGFloat {
-        HistoryLayout.cardSide / 5
-    }
-
-    private var imagePreviewSize: CGSize {
-        CGSize(
-            width: HistoryLayout.cardSide - previewPadding * 2,
-            height: HistoryLayout.cardSide - headerHeight - footerHeight - previewPadding * 2
-        )
-    }
-
     private var cardFill: Color {
         if isCopied {
             return Paste3Theme.success.opacity(colorScheme == .dark ? 0.18 : 0.14)
@@ -1418,7 +1452,7 @@ private struct ClipboardCard: View {
             return palette.primary.opacity(colorScheme == .dark ? 0.18 : 0.12)
         }
 
-        return isHovering ? palette.primary.opacity(colorScheme == .dark ? 0.13 : 0.10) : palette.cardFill
+        return allowsHoverEffects && isHovering ? palette.primary.opacity(colorScheme == .dark ? 0.13 : 0.10) : palette.cardFill
     }
 
     private var cardStroke: Color {
@@ -1430,7 +1464,7 @@ private struct ClipboardCard: View {
             return palette.primary.opacity(0.82)
         }
 
-        return isHovering ? palette.primary.opacity(0.58) : palette.border
+        return allowsHoverEffects && isHovering ? palette.primary.opacity(0.58) : palette.border
     }
 
     private var tapGesture: some Gesture {
@@ -1449,20 +1483,14 @@ private struct ClipboardCard: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            cardHeader
-
-            contentPreview
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            cardFooter
-        }
+        staticContent
         .frame(width: HistoryLayout.cardSide, height: HistoryLayout.cardSide, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous))
         .paste3GlassSurface(
             cornerRadius: Paste3Theme.cardRadius,
             fill: cardFill,
-            isProminent: isSelected || isHovering || isCopied
+            isProminent: isSelected || (allowsHoverEffects && isHovering) || isCopied,
+            renderingMode: surfaceRenderingMode
         )
         .overlay {
             RoundedRectangle(cornerRadius: Paste3Theme.cardRadius, style: .continuous)
@@ -1485,14 +1513,21 @@ private struct ClipboardCard: View {
                 shortcutBadge(shortcutNumber)
             }
         }
-        .scaleEffect(isHovering ? 1.01 : 1)
-        .animation(.easeOut(duration: 0.16), value: isHovering)
-        .animation(.easeOut(duration: 0.16), value: isSelected)
+        .scaleEffect(allowsHoverEffects && isHovering ? 1.01 : 1)
+        .animation(allowsHoverEffects ? .easeOut(duration: 0.16) : nil, value: isHovering)
+        .animation(allowsSelectionAnimation ? .easeOut(duration: 0.16) : nil, value: isSelected)
         .animation(.easeOut(duration: 0.10), value: shortcutNumber)
         .onHover { hovering in
+            guard allowsHoverEffects else {
+                isHovering = false
+                return
+            }
             isHovering = hovering
         }
         .gesture(tapGesture)
+        .onAppear {
+            warmAppIconAppearance()
+        }
         .contextMenu {
             if !pinboards.isEmpty {
                 Menu("Pin 到 Pinboard") {
@@ -1529,6 +1564,36 @@ private struct ClipboardCard: View {
         .help("Click to select. Double-click to copy. Right-click to pin or delete.")
     }
 
+    private var staticContent: some View {
+        ClipboardCardStaticContent(
+            snapshot: snapshot,
+            isCopied: isCopied,
+            allowsPreviewScrolling: allowsPreviewScrolling,
+            usesAppIconAppearance: usesAppIconAppearance,
+            appIconAppearanceRevision: appIconAppearanceRevision,
+            colorScheme: colorScheme
+        )
+        .equatable()
+    }
+
+    private var appIconAppearanceRevision: Int {
+#if os(macOS)
+        appIconAppearanceCache.revision
+#else
+        0
+#endif
+    }
+
+    private func warmAppIconAppearance() {
+#if os(macOS)
+        guard usesAppIconAppearance else {
+            return
+        }
+
+        appIconAppearanceCache.warm(snapshot.item.sourceBundleIdentifier)
+#endif
+    }
+
     private func shortcutBadge(_ number: Int) -> some View {
         Text("\(number)")
             .font(.system(size: 13, weight: .heavy, design: .rounded))
@@ -1554,6 +1619,59 @@ private struct ClipboardCard: View {
             .shadow(color: palette.glassShadow.opacity(0.38), radius: 8, x: 0, y: 4)
             .padding(10)
             .accessibilityLabel("Shortcut \(number)")
+    }
+}
+
+private struct ClipboardCardStaticContent: View, Equatable {
+    let snapshot: ClipboardCardSnapshot
+    let isCopied: Bool
+    let allowsPreviewScrolling: Bool
+    let usesAppIconAppearance: Bool
+    let appIconAppearanceRevision: Int
+    let colorScheme: ColorScheme
+
+    private var palette: Paste3Theme.Palette {
+        Paste3Theme.palette(for: colorScheme)
+    }
+
+    private let iconSize: CGFloat = 42
+    private let footerHeight: CGFloat = 26
+    private let previewPadding: CGFloat = 14
+
+    private var headerHeight: CGFloat {
+        HistoryLayout.cardSide / 5
+    }
+
+    private var imagePreviewSize: CGSize {
+        CGSize(
+            width: HistoryLayout.cardSide - previewPadding * 2,
+            height: HistoryLayout.cardSide - headerHeight - footerHeight - previewPadding * 2
+        )
+    }
+
+    static func == (lhs: ClipboardCardStaticContent, rhs: ClipboardCardStaticContent) -> Bool {
+        lhs.snapshot.id == rhs.snapshot.id &&
+            lhs.snapshot.createdAtText == rhs.snapshot.createdAtText &&
+            lhs.snapshot.detailText == rhs.snapshot.detailText &&
+            lhs.snapshot.item.kindRawValue == rhs.snapshot.item.kindRawValue &&
+            lhs.snapshot.item.payloadType == rhs.snapshot.item.payloadType &&
+            lhs.snapshot.item.payloadFileName == rhs.snapshot.item.payloadFileName &&
+            lhs.isCopied == rhs.isCopied &&
+            lhs.allowsPreviewScrolling == rhs.allowsPreviewScrolling &&
+            lhs.usesAppIconAppearance == rhs.usesAppIconAppearance &&
+            lhs.appIconAppearanceRevision == rhs.appIconAppearanceRevision &&
+            lhs.colorScheme == rhs.colorScheme
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            cardHeader
+
+            contentPreview
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            cardFooter
+        }
     }
 
     private var cardHeader: some View {
@@ -1647,7 +1765,7 @@ private struct ClipboardCard: View {
 
     private var headerFill: Color {
 #if os(macOS)
-        if let color = AppIconAppearanceCache.shared.headerColor(
+        if usesAppIconAppearance, let color = AppIconAppearanceCache.shared.headerColor(
             for: snapshot.item.sourceBundleIdentifier,
             colorScheme: colorScheme
         ) {
@@ -1661,7 +1779,7 @@ private struct ClipboardCard: View {
     @ViewBuilder
     private var sourceIcon: some View {
 #if os(macOS)
-        if let icon = AppIconAppearanceCache.shared.icon(for: snapshot.item.sourceBundleIdentifier) {
+        if usesAppIconAppearance, let icon = AppIconAppearanceCache.shared.icon(for: snapshot.item.sourceBundleIdentifier) {
             Image(nsImage: icon)
                 .resizable()
                 .scaledToFit()
@@ -1705,7 +1823,7 @@ private struct ClipboardCard: View {
 
     @ViewBuilder
     private var textPreview: some View {
-        if snapshot.item.text.count > 180 || snapshot.item.text.contains("\n") {
+        if allowsPreviewScrolling && (snapshot.item.text.count > 180 || snapshot.item.text.contains("\n")) {
             ScrollView {
                 contentText
             }
@@ -1799,62 +1917,88 @@ private extension ClipboardItem {
     }
 
 #if os(macOS)
+    @MainActor
     var previewImage: NSImage? {
-        guard let payloadData else {
-            return nil
-        }
-
-        return NSImage(data: payloadData)
+        ClipboardPreviewImageCache.shared.image(for: self)
     }
 #endif
 }
 
 #if os(macOS)
 @MainActor
-private final class AppIconAppearanceCache {
+private final class AppIconAppearanceCache: ObservableObject {
     static let shared = AppIconAppearanceCache()
 
-    private struct Entry {
+    private struct Entry: @unchecked Sendable {
         let icon: NSImage
         let dominantColor: NSColor?
     }
 
+    @Published private(set) var revision = 0
+
     private var entries: [String: Entry] = [:]
+    private var loadingBundleIdentifiers: Set<String> = []
+    private var missingBundleIdentifiers: Set<String> = []
 
     func icon(for bundleIdentifier: String?) -> NSImage? {
-        entry(for: bundleIdentifier)?.icon
+        cachedEntry(for: bundleIdentifier)?.icon
     }
 
     func headerColor(for bundleIdentifier: String?, colorScheme: ColorScheme) -> Color? {
-        guard let dominantColor = entry(for: bundleIdentifier)?.dominantColor else {
+        guard let dominantColor = cachedEntry(for: bundleIdentifier)?.dominantColor else {
             return nil
         }
 
         return dominantColor.headerColor(for: colorScheme)
     }
 
-    private func entry(for bundleIdentifier: String?) -> Entry? {
+    func warm(_ bundleIdentifier: String?) {
+        guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return
+        }
+
+        guard entries[bundleIdentifier] == nil,
+              !loadingBundleIdentifiers.contains(bundleIdentifier),
+              !missingBundleIdentifiers.contains(bundleIdentifier) else {
+            return
+        }
+
+        loadingBundleIdentifiers.insert(bundleIdentifier)
+
+        Task.detached(priority: .utility) { [bundleIdentifier] in
+            let entry = Self.loadEntry(for: bundleIdentifier)
+            await MainActor.run {
+                if let entry {
+                    self.entries[bundleIdentifier] = entry
+                    self.revision += 1
+                } else {
+                    self.missingBundleIdentifiers.insert(bundleIdentifier)
+                }
+                self.loadingBundleIdentifiers.remove(bundleIdentifier)
+            }
+        }
+    }
+
+    private func cachedEntry(for bundleIdentifier: String?) -> Entry? {
         guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
             return nil
         }
 
-        if let entry = entries[bundleIdentifier] {
-            return entry
-        }
+        return entries[bundleIdentifier]
+    }
 
+    private nonisolated static func loadEntry(for bundleIdentifier: String) -> Entry? {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
             return nil
         }
 
         let icon = NSWorkspace.shared.icon(forFile: appURL.path)
-        let entry = Entry(icon: icon, dominantColor: icon.dominantColor())
-        entries[bundleIdentifier] = entry
-        return entry
+        return Entry(icon: icon, dominantColor: icon.dominantColor())
     }
 }
 
 private extension NSImage {
-    func dominantColor(sampleSize: Int = 28) -> NSColor? {
+    nonisolated func dominantColor(sampleSize: Int = 28) -> NSColor? {
         guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }

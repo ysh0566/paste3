@@ -1,6 +1,6 @@
 //
 //  AccessibilityPermission.swift
-//  paste3
+//  Paste3
 //
 //  Created by Codex on 2026/5/8.
 //
@@ -48,8 +48,8 @@ enum AccessibilityPermission {
     @MainActor
     private static func showManualGrantPrompt() {
         let alert = NSAlert()
-        alert.messageText = "paste3 需要辅助功能权限"
-        alert.informativeText = "请在系统设置的辅助功能列表中开启 paste3，用于在选中剪贴板历史后自动粘贴到当前应用。"
+        alert.messageText = "Paste3 需要辅助功能权限"
+        alert.informativeText = "请在系统设置的辅助功能列表中开启 Paste3，用于在选中剪贴板历史后自动粘贴到当前应用。"
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "稍后")
 

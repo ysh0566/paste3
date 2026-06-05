@@ -61,12 +61,12 @@ jobs:
 
       - name: Create DMG
         run: |
-          APP_PATH="/tmp/paste3-derived-release/Build/Products/Release/paste3.app"
+          APP_PATH="/tmp/paste3-derived-release/Build/Products/Release/Paste3.app"
           DMG_PATH="${RUNNER_TEMP}/paste3-${GITHUB_REF_NAME}-macos.dmg"
 
           test -d "$APP_PATH"
           hdiutil create \
-            -volname "paste3 ${GITHUB_REF_NAME}" \
+            -volname "Paste3 ${GITHUB_REF_NAME}" \
             -srcfolder "$APP_PATH" \
             -ov \
             -format UDZO \
@@ -82,6 +82,6 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$DMG_PATH" \
-              --title "paste3 ${GITHUB_REF_NAME}" \
+              --title "Paste3 ${GITHUB_REF_NAME}" \
               --notes "Automated unsigned macOS build for ${GITHUB_REF_NAME}."
           fi

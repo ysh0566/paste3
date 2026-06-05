@@ -1,6 +1,6 @@
 //
 //  QuickPanelHotKeyRegistrar.swift
-//  paste3
+//  Paste3
 //
 //  Created by Codex on 2026/5/8.
 //

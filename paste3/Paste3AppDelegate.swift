@@ -24,6 +24,7 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
         startClipboardMonitorIfNeeded()
         startQuickPanelHotKey()
         setupStatusItem()
+        rebuildSearchIndexIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -164,6 +165,22 @@ final class Paste3AppDelegate: NSObject, NSApplicationDelegate {
             appName: app?.localizedName,
             bundleIdentifier: app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app?.bundleIdentifier
         )
+    }
+
+    private func rebuildSearchIndexIfNeeded() {
+        Task { @MainActor in
+            let context = ModelContext(Paste3ModelContainer.shared)
+            var descriptor = FetchDescriptor<ClipboardItem>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            descriptor.fetchLimit = 5_000
+
+            guard let items = try? context.fetch(descriptor) else {
+                return
+            }
+
+            try? ClipboardSearchIndex.shared.rebuild(from: items)
+        }
     }
 }
 #endif

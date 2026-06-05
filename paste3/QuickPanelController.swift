@@ -1,6 +1,6 @@
 //
 //  QuickPanelController.swift
-//  paste3
+//  Paste3
 //
 //  Created by ysh0566@qq.com on 2026/5/7.
 //
@@ -61,7 +61,7 @@ final class QuickPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "paste3"
+        panel.title = "Paste3"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
